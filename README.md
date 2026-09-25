@@ -23,8 +23,6 @@ Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bun
 Only for the MILO MCP:
 
 - **Claude Code**, to use the MCP.
-- **BIOVIA documentation dumps**, for docs search. They are not in the repo: point `MILO_DOCS_DIR`
-  at them, then build the index once with `milo_index_docs`.
 - **Perl**, for checking Discovery Studio scripts. Git for Windows already includes it.
 - **BIOVIA itself** (Materials Studio / Discovery Studio), to run the scripts and make bundles.
 
@@ -65,6 +63,7 @@ data, and the next launch finds them already up.
 | `src/milo_app/predict.py` | Calculated ghost nodes: the model, the candidates, the confidence |
 | `src/milo_app/blind.py` | Blind tests: every new run predicted before it is added, then checked |
 | `src/milo_app/mcp/` | The MILO MCP: script writing, docs search, script checks, graph tools |
+| `src/milo_app/mcp/knowledge/` | The BIOVIA knowledge files the MCP's docs search reads |
 | `src/milo_app/services.py` | Starts Docker (clearing the stale socket files that block it) and Neo4j |
 | `src/milo_app/bundle.py` | Reads a bundle folder: the ingestion contract |
 | `.env` | Database address and password, drop folder, scan interval |
@@ -135,7 +134,8 @@ they go to the VM, and reads and adds to this app's graph (`milo_graph_data`, `m
 claude mcp add milo -s user -- uv --directory C:\path\to\milo-app run milo-mcp
 ```
 
-Its docs index (`data/docs.sqlite`, rebuilt with `milo_index_docs` from `MILO_DOCS_DIR`) and the scripts
-it writes (`data/generated_scripts/`) stay in `data/`. `milo_check_script` runs a script against a
-stand-in for BIOVIA in a temporary folder that is deleted afterwards: it checks the script's structure
+Its BIOVIA knowledge files ship with it in `src/milo_app/mcp/knowledge/` (Materials Studio and
+Discovery Studio). The search index over them, `data/docs.sqlite`, is built on the first search
+(`milo_index_docs` rebuilds it after the files change). The index and the scripts it writes
+(`data/generated_scripts/`) stay in `data/`. `milo_check_script` runs a script against a stand-in for BIOVIA in a temporary folder that is deleted afterwards: it checks the script's structure
 and bundle, and nothing it produces ever reaches the drop folder or the graph.

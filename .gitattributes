@@ -1,0 +1,2 @@
+# the BIOVIA knowledge files are kept byte for byte
+src/milo_app/mcp/knowledge/** -text

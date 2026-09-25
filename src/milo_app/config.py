@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "assets"
+# The BIOVIA knowledge files the MCP searches, shipped with it.
+KNOWLEDGE = ROOT / "src" / "milo_app" / "mcp" / "knowledge"
 DATA = ROOT / "data"
 COMPOSE_FILE = ROOT / "compose.yaml"
 COMPOSE_PROJECT = "milo-app"
@@ -32,7 +34,7 @@ class Settings:
     scan_seconds: float
     ghosts: int  # calculated ghosts per real run, for each knob (ghost.md 4.3)
     drop_dir_vm: str  # the drop folder as the BIOVIA VM sees it: baked into the scripts the MCP writes
-    docs_dir: Path  # the BIOVIA documentation dumps the MCP searches
+    docs_dir: Path  # the BIOVIA knowledge files the MCP searches
     data_dir: Path  # where the MCP keeps its docs index and the scripts it wrote
 
 
@@ -47,6 +49,6 @@ def get_settings() -> Settings:
         scan_seconds=float(env("MILO_SCAN_SECONDS", "3")),
         ghosts=int(env("MILO_GHOSTS", "1")),
         drop_dir_vm=env("MILO_DROP_DIR_VM", r"C:\milo_drop"),
-        docs_dir=Path(env("MILO_DOCS_DIR", str(Path.home() / "Documents" / "biovia"))),
+        docs_dir=Path(env("MILO_DOCS_DIR", str(KNOWLEDGE))),
         data_dir=Path(env("MILO_DATA_DIR", str(DATA))),
     )
