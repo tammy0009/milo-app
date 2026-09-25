@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from milo_app.ui import theme
-from milo_app.ui.format import elapsed, short_title
+from milo_app.ui.format import elapsed, ghost_change, short_title
 
 G = theme.GRAPH
 
@@ -39,6 +39,7 @@ REPULSION = 42000.0
 SPRING = 0.035
 SPRING_LENGTH = 170.0
 GRAVITY = 0.004
+CAMPAIGN_PULL = 0.02  # toward the middle of a campaign's runs and ghosts
 DAMPING = 0.82
 MAX_STEP = 30.0
 COOLING = 0.985
@@ -310,41 +311,66 @@ class PredictionNode(Node):
         self.setZValue(2)
 
     def set_data(self, data: dict[str, Any]) -> None:
+        """Under the ghost: what it changes, in shorthand ("PLA frac 0.53→0.41"), then how sure it is,
+        colored from red (unsure) to green (sure). A campaign's ghosts are tinted with its color."""
         pred = data["pred"]
         self.data_ = data
-        self.title = str(pred.get("title") or "prediction")
-        metrics = QFontMetrics(self.label_font)
+        self.title = data.get("title") or str(pred.get("title") or "prediction")
+        self.tint = QColor(data["tint"]) if data.get("tint") else None
         sure = pred.get("confidence")
         if pred.get("source") == "verified" and pred.get("values"):
-            label = f"Verified · {pred.get('right')}/{pred.get('values')} right"  # it was really run
+            self.sure_text = f"Verified · {pred.get('right')}/{pred.get('values')} right"  # it was really run
+            share = pred["right"] / pred["values"] if isinstance(pred.get("right"), (int, float)) else None
         elif isinstance(sure, (int, float)):
-            label = f"Ghost · {sure:.0%}" if sure >= 0.01 else f"Ghost · {sure:.1%}"  # 0.4 % must not read "0 %"
+            self.sure_text = f"{sure:.0%}" if sure >= 0.01 else f"{sure:.1%}"  # 0.4 % must not read "0 %"
+            share = sure
         else:
-            label = "Ghost"
-        self.label = metrics.elidedText(label, Qt.TextElideMode.ElideRight, G["sim_label_max"])
-        self.label_w = metrics.horizontalAdvance(self.label) + 4
+            self.sure_text, share = "Ghost", None
+        self.sure_color = QColor(theme.confidence_color(share) if share is not None else G["ghost_ink"])
+        change, _ = ghost_change(pred)
+        self.change_font = theme.font(G["ghost_change_px"])
+        self.change = QFontMetrics(self.change_font).elidedText(change, Qt.TextElideMode.ElideRight, G["sim_label_max"])
+        self.sure_w = QFontMetrics(self.label_font).horizontalAdvance(self.sure_text) + 4
+        self.change_w = QFontMetrics(self.change_font).horizontalAdvance(self.change) + 4
+        self.label_w = max(self.sure_w, self.change_w)
         made = "reasoned by the MCP" if pred.get("source") == "mcp" else "calculated"
-        sure_text = f"{sure:.1%} confidence" if isinstance(sure, (int, float)) else "no confidence given"
-        self.setToolTip(f"{self.title}\nPrediction, {made}, {sure_text}")
+        sure_line = f"{sure:.1%} confidence" if isinstance(sure, (int, float)) else "no confidence given"
+        self.setToolTip(f"{self.title}\nPrediction, {made}, {sure_line}")
         self.prepareGeometryChange()
         self.update()
 
     def boundingRect(self) -> QRectF:  # noqa: N802
         half = max(self.r + 5, self.label_w / 2)
-        return QRectF(-half, -self.r - 5, 2 * half, 2 * self.r + 10 + G["sim_label_px"] + 6)
+        lines = G["ghost_change_px"] + 4 + G["sim_label_px"] + 6
+        return QRectF(-half, -self.r - 5, 2 * half, 2 * self.r + 10 + lines)
 
     def inside(self, p: QPointF) -> QPointF:
         return _in_circle(p, self.r)
 
     def paint(self, painter: QPainter, _option, _widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(G["ghost_line"]), 1.5, Qt.PenStyle.DashLine))
-        painter.setBrush(QColor(G["ghost_fill"]))
+        line, fill = QColor(G["ghost_line"]), QColor(G["ghost_fill"])
+        if self.tint is not None:  # faintly its campaign's color
+            line, fill = QColor(self.tint), QColor(self.tint)
+            line.setAlpha(G["ghost_tint_line"])
+            fill.setAlpha(G["ghost_tint_fill"])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(G["ghost_fill"]))  # a white disc under the tint, so links do not show through
+            painter.drawEllipse(QPointF(0, 0), self.r - 0.75, self.r - 0.75)
+        painter.setPen(QPen(line, 1.5, Qt.PenStyle.DashLine))
+        painter.setBrush(fill)
         painter.drawEllipse(QPointF(0, 0), self.r - 0.75, self.r - 0.75)
+        top = self.r + 5
+        if self.change:
+            painter.setFont(self.change_font)
+            painter.setPen(QColor(G["ghost_ink"]))
+            painter.drawText(QRectF(-self.change_w / 2, top, self.change_w, G["ghost_change_px"] + 4),
+                             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.change)
+            top += G["ghost_change_px"] + 4
         painter.setFont(self.label_font)
-        painter.setPen(QColor(G["ghost_ink"]))
-        painter.drawText(QRectF(-self.label_w / 2, self.r + 6, self.label_w, G["sim_label_px"] + 6),
-                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.label)
+        painter.setPen(self.sure_color)
+        painter.drawText(QRectF(-self.sure_w / 2, top, self.sure_w, G["sim_label_px"] + 6),
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.sure_text)
 
 
 KINDS = {"sim": SimNode, "descriptor": DescriptorNode, "relationship": RelationshipNode, "prediction": PredictionNode}
@@ -386,7 +412,8 @@ class CampaignRing(QGraphicsObject):
     the ring itself takes the mouse (a band along it): grab it to move every run of the campaign at
     once; inside it, nodes and the background work as usual."""
 
-    def __init__(self, name: str, color: str, sims: list["SimNode"], canvas: "GraphView") -> None:
+    def __init__(self, name: str, color: str, sims: list[Node], canvas: "GraphView") -> None:
+        """sims: the campaign's runs on screen and their ghosts: everything the ring holds and moves."""
         super().__init__()
         self.name, self.sims, self.canvas = name, sims, canvas
         self.color = QColor(color)
@@ -564,14 +591,16 @@ class GraphView(QGraphicsView):
         self.reheat(1.0)
 
     def set_campaigns(self, campaigns: list[dict[str, Any]]) -> None:
-        """A ring for each campaign with runs on screen: [{"name", "color", "sims": [bundle ids]}]."""
+        """A ring for each campaign with runs on screen, round its runs and their ghosts:
+        [{"name", "color", "sims": [bundle ids], "ghosts": [ghost node ids]}]."""
         for ring in self.rings.values():
             self.graph_scene.removeItem(ring)
         self.rings = {}
         for campaign in campaigns:
             sims = [self.nodes[s] for s in campaign["sims"] if isinstance(self.nodes.get(s), SimNode)]
+            ghosts = [self.nodes[g] for g in campaign.get("ghosts", []) if isinstance(self.nodes.get(g), PredictionNode)]
             if sims:
-                ring = CampaignRing(campaign["name"], campaign["color"], sims, self)
+                ring = CampaignRing(campaign["name"], campaign["color"], sims + ghosts, self)
                 self.graph_scene.addItem(ring)
                 self.rings[campaign["name"]] = ring
         if self.rings and not self.spinner.isActive():
@@ -699,6 +728,15 @@ class GraphView(QGraphicsView):
                 fy[i] += py
                 fx[j] -= px
                 fy[j] -= py
+        # each campaign's runs and ghosts are pulled gently together, so its ring stays tight
+        for ring in self.rings.values():
+            members = [index[m.key] for m in ring.sims if m.key in index]
+            if len(members) > 1:
+                cx = sum(xs[i] for i in members) / len(members)
+                cy = sum(ys[i] for i in members) / len(members)
+                for i in members:
+                    fx[i] += CAMPAIGN_PULL * (cx - xs[i])
+                    fy[i] += CAMPAIGN_PULL * (cy - ys[i])
         for edge in self.edges:
             i, j = index[edge.a.key], index[edge.b.key]
             dx, dy = xs[j] - xs[i], ys[j] - ys[i]

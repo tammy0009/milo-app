@@ -440,7 +440,8 @@ def _ghost(models, columns, knobs, row, base, knob, was, base_title, n_sims) -> 
     units = columns[knob]["units"]
     return {
         "id": "calc-" + hashlib.sha1(f"{base}|{knob}|{_tidy(values[knob])}".encode()).hexdigest()[:12],
-        "title": f"{short_title(base_title, 24)} · {_knob_name(knob)} {_tidy(values[knob]):g}{' ' + units if units else ''}",
+        "title": f"{short_title(base_title, 24)} · {_knob_name(knob)} {_tidy(was):g} → {_tidy(values[knob]):g}"
+                 f"{' ' + units if units else ''}",
         "based_on": [base], "base": base, "changed": knob,
         "model": "Bayesian linear regression + rule of succession",
         "confidence": float(np.mean(list(confidences.values()))) if confidences else 0.0,

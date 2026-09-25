@@ -33,6 +33,8 @@ COLORS = {
 FONT_FILES = ("alte-haas-grotesk-regular.ttf", "alte-haas-grotesk-bold.ttf")
 WORDMARK_FONT_FILE = "cs_regular.ttf"
 FONT_FALLBACK = "Segoe UI"  # used if the font files above are missing
+# Characters the MILO font does not have (→, Greek letters like ρ and σ, ∝) are drawn from these instead.
+GLYPH_FALLBACKS = ("Segoe UI", "Segoe UI Symbol", "Cambria Math")
 
 SIZES = {
     "base": 13,        # px, body text
@@ -85,6 +87,10 @@ GRAPH = {
     "ghost_ink": "#6b6b6b",
     "ghost_opacity": 0.85,
     "dim": 0.12,               # opacity of nodes a search does not match
+    # ghosts: a campaign's ghosts are tinted with its color (these alphas, 0-255)
+    "ghost_tint_fill": 34,
+    "ghost_tint_line": 170,
+    "ghost_change_px": 10,     # the shorthand of what a ghost changes, under it
     # a run that failed: a red ring round its circle and a "!" badge (grey, with no badge, once redone)
     "fail_ring_width": 3.0,
     "fail_badge": 15,          # diameter of the "!" badge
@@ -109,6 +115,19 @@ CHART = {
 }
 
 # Each descriptor group switched on takes the next color here, in the order they were switched on.
+# A ghost's confidence as a color: red when unsure, through amber, to green when sure (hue in degrees).
+CONFIDENCE_HUES = (0, 125)
+CONFIDENCE_SAT_VAL = (0.85, 0.72)
+
+
+def confidence_color(confidence: float) -> str:
+    from PySide6.QtGui import QColor
+
+    c = min(max(float(confidence), 0.0), 1.0)
+    low, high = CONFIDENCE_HUES
+    return QColor.fromHsvF((low + (high - low) * c) / 360, *CONFIDENCE_SAT_VAL).name()
+
+
 GROUP_COLORS = [
     "#e4572e", "#2e86ab", "#3bb273", "#f3a712", "#8e44ad",
     "#e84393", "#00a8a8", "#6c5ce7", "#a0522d", "#708090",
@@ -217,7 +236,7 @@ def apply(app: QApplication) -> None:
     wordmark_id = QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / WORDMARK_FONT_FILE))
     if wordmark_id >= 0:
         _wordmark_family = QFontDatabase.applicationFontFamilies(wordmark_id)[0]
-    font = _quality_font(QFont(_family))
+    font = _quality_font(_with_fallbacks(QFont(_family)))
     font.setPixelSize(SIZES["base"])
     app.setFont(font)  # the base font; stylesheet rules below only change sizes where they say so
     app.setStyle("Fusion")  # a neutral base the stylesheet fully controls
@@ -230,8 +249,13 @@ def apply(app: QApplication) -> None:
 WORDMARKS = {"wordmark": 5, "splash": 14}
 
 
+def _with_fallbacks(f: QFont) -> QFont:
+    f.setFamilies([f.family(), *(name for name in GLYPH_FALLBACKS if name != f.family())])
+    return f
+
+
 def font(px: int, bold: bool = False) -> QFont:
-    f = _quality_font(QFont(_family))
+    f = _quality_font(_with_fallbacks(QFont(_family)))
     f.setPixelSize(px)
     f.setBold(bold)
     # Hinting snaps letters to the pixel grid at 100 %; on the zoomable graph that grid no longer

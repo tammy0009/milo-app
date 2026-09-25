@@ -32,7 +32,7 @@ from milo_app.ui import theme
 from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
 from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows
-from milo_app.ui.format import elapsed, pretty_name, quantity, shown_value, sig, size_text, test_summary
+from milo_app.ui.format import elapsed, ghost_title, pretty_name, quantity, shown_value, sig, size_text, test_summary
 from milo_app.ui.formulas import FormulaView
 from milo_app.ui.graph_view import GraphView
 from milo_app.ui.typebar import TypeBar
@@ -512,11 +512,19 @@ class MainWindow(QMainWindow):
                 links += [{"a": rel_id, "b": d, "color": theme.GRAPH["rel_edge"], "width": theme.GRAPH["rel_edge_width"],
                            "alpha": 200} for d in descriptor_ids[key]]
 
+        campaign_by_sim = {s["bundle_id"]: graph.campaign_of(s) for s in sims}
+        ghost_rings: dict[str, list[str]] = {}
         for pred in predictions:
             if not set(pred["based_on"]) & shown_sims:
                 continue  # its runs are unchecked in the Sim Feed
             pred_id = "pred:" + pred["id"]
-            nodes.append({"id": pred_id, "kind": "prediction", "pred": pred})
+            # a ghost of a campaign's runs belongs in the campaign's ring, faintly in its color
+            homes = {campaign_by_sim.get(s) for s in pred["based_on"]}
+            home = next(iter(homes)) if len(homes) == 1 else None
+            if home:
+                ghost_rings.setdefault(home, []).append(pred_id)
+            nodes.append({"id": pred_id, "kind": "prediction", "pred": pred, "title": ghost_title(pred, self._titles),
+                          "tint": campaign_color(home) if home else None})
             links += [{"a": pred_id, "b": s, "color": theme.GRAPH["ghost_line"], "style": "dashed", "alpha": 200}
                       for s in pred["based_on"]]
 
@@ -530,8 +538,9 @@ class MainWindow(QMainWindow):
             name = graph.campaign_of(s)
             if name and s["bundle_id"] in shown_sims:
                 rings.setdefault(name, []).append(s["bundle_id"])
-        self.canvas.set_campaigns([{"name": n, "color": campaign_color(n), "sims": ids} for n, ids in rings.items()]
-                                  if "sim" in shown else [])
+        self.canvas.set_campaigns([{"name": n, "color": campaign_color(n), "sims": ids,
+                                    "ghosts": ghost_rings.get(n, []) if "prediction" in shown else []}
+                                   for n, ids in rings.items()] if "sim" in shown else [])
         hints = []
         if "descriptor" in shown and not self.descriptors.active:
             hints.append("No descriptors checked: check fields in the list on the left")
@@ -604,7 +613,7 @@ class MainWindow(QMainWindow):
             return
         self.current = None
         titles = {"descriptor": lambda: data["label"], "relationship": lambda: data["rel"].get("name") or "Relationship",
-                  "prediction": lambda: data["pred"].get("title") or "Prediction"}
+                  "prediction": lambda: data.get("title") or data["pred"].get("title") or "Prediction"}
         linked = {"descriptor": lambda: data["sims"],
                   "relationship": lambda: [p[0] for p in loads(data["rel"].get("points"), [])],
                   "prediction": lambda: data["pred"].get("based_on") or []}

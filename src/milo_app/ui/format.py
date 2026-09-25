@@ -111,6 +111,66 @@ def pretty_name(raw: str) -> str:
     return " ".join(out) or raw
 
 
+# Shorthand for the words of a knob's name, for a ghost's label ("pla_mass_fraction" -> "PLA frac").
+SHORT_WORDS = {"temperature": "T", "pressure": "P", "fraction": "frac", "mass": "", "time": "t",
+               "density": "ρ", "requested": "", "number": "n", "total": "", "repeat": "rep", "units": "units",
+               "construction": "build", "trajectory": "traj", "frames": "frames", "random": "", "seed": "seed",
+               "iterations": "iters", "max": "max", "budget": "budget", "chains": "chains", "steps": "steps"}
+
+
+def knob_short(key: str) -> str:
+    """A knob in a few characters: "input:requested.pla_mass_fraction" -> "PLA frac",
+    "requested.temperature_k" -> "T" (its units are shown with the value)."""
+    name = key.partition(":")[2] if ":" in key else key
+    name = name.removeprefix("requested.")
+    words = [w for w in re.split(r"[._\s-]+", name) if w]
+    if len(words) > 1 and words[-1].lower() in UNIT_WORDS:
+        words = words[:-1]
+    out = []
+    for word in words:
+        low = word.lower()
+        short = ACRONYMS.get(low, SHORT_WORDS.get(low, low))
+        if short:
+            out.append(short)
+    return " ".join(out) or pretty_name(name)
+
+
+def ghost_change(pred: dict[str, Any]) -> tuple[str, str]:
+    """What a ghost guesses about, as (shorthand for its label, words for its title): the knob it moves
+    and from what to what ("PLA frac 0.53→0.41", "PLA Mass Fraction 0.53 → 0.41"). A ghost the MCP
+    reasoned out has no single moved knob: its proposed settings are listed instead."""
+    try:
+        inputs = json.loads(pred.get("inputs_json") or "{}")
+    except (TypeError, ValueError):
+        inputs = {}
+    moved = [(k, v) for k, v in inputs.items() if isinstance(v, dict) and "was" in v]
+    shown = moved or list(inputs.items())[:2]
+    shorts, longs = [], []
+    for key, v in shown:
+        value = v.get("value") if isinstance(v, dict) else v
+        units = (v.get("units") if isinstance(v, dict) else None) or ""
+        units = f" {units}" if units else ""
+        name = pretty_name((key.partition(":")[2] if ":" in key else key).removeprefix("requested."))
+        now = sig(value, 4) if isinstance(value, (int, float)) else str(value)
+        if isinstance(v, dict) and "was" in v:
+            was = sig(v["was"], 4) if isinstance(v["was"], (int, float)) else str(v["was"])
+            shorts.append(f"{knob_short(key)} {was}→{now}{units}")
+            longs.append(f"{name} {was} → {now}{units}")
+        else:
+            shorts.append(f"{knob_short(key)} {now}{units}")
+            longs.append(f"{name} {now}{units}")
+    return ", ".join(shorts), ", ".join(longs)
+
+
+def ghost_title(pred: dict[str, Any], titles: dict[str, str] | None = None) -> str:
+    """A ghost's title: the run it comes from, and what it changes."""
+    base = (titles or {}).get(pred.get("base") or (pred.get("based_on") or [None])[0] or "")
+    _short, change = ghost_change(pred)
+    if base and change:
+        return f"{short_title(base, 24)} · {change}"
+    return change or str(pred.get("title") or "Ghost")
+
+
 def short_title(title: str, limit: int = 18) -> str:
     """A label short enough to sit under a node: the part before any ':' and only as many whole
     words as fit. "PLA30/PCL70 amorphous cell" -> "PLA30/PCL70…"."""
