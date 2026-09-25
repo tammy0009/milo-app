@@ -57,6 +57,7 @@ class NodeInfo(QWidget):
 
     closed = Signal()
     sim_clicked = Signal(str)  # bundle_id
+    isolate_toggled = Signal(str, bool)  # campaign, on: work its ghosts out from its own runs only
 
     def __init__(self) -> None:
         super().__init__()
@@ -77,6 +78,9 @@ class NodeInfo(QWidget):
         self.headline_label = QLabel(objectName="KindLabel")
         self.headline = QLabel(objectName="Headline", wordWrap=True)
         self.headline.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.isolate = QPushButton("Isolate", objectName="Chip", checkable=True)
+        self.isolate.toggled.connect(lambda on: self._campaign and self.isolate_toggled.emit(self._campaign, on))
+        self._campaign: str | None = None
         self.changes_label = QLabel(objectName="KindLabel")
         self.changes = QGridLayout()
         self.changes.setHorizontalSpacing(10)
@@ -92,6 +96,7 @@ class NodeInfo(QWidget):
         s.setSpacing(8)
         s.addLayout(sure_row)
         s.addWidget(self.bar)
+        s.addWidget(self.isolate, 0, Qt.AlignmentFlag.AlignLeft)
         s.addSpacing(10)
         s.addWidget(self.headline_label)
         s.addWidget(self.headline)
@@ -203,6 +208,16 @@ class NodeInfo(QWidget):
                 self.changes.addWidget(c, i, 2, Qt.AlignmentFlag.AlignTop)
         self.more.setText(summary.get("more", ""))
         self.more.setVisible(bool(summary.get("more")))
+        isolate = summary.get("isolate")  # {"campaign", "on"} for a ghost of a campaign's run
+        self._campaign = isolate["campaign"] if isolate else None
+        self.isolate.setVisible(isolate is not None)
+        self.isolate.blockSignals(True)
+        self.isolate.setChecked(bool(isolate and isolate["on"]))
+        self.isolate.blockSignals(False)
+        if isolate:
+            self.isolate.setText(f"Isolated to {isolate['campaign']}" if isolate["on"] else f"Isolate {isolate['campaign']}")
+            self.isolate.setToolTip("Work this campaign's ghosts out from its own runs only (its ring turns while on)"
+                                    if not isolate["on"] else "Click to use every run again")
 
 
 class Drawer(QFrame):
@@ -421,6 +436,8 @@ def prediction_summary(pred: dict[str, Any], base: dict[str, tuple[Any, Any]] | 
     else:
         summary["confidence_note"] = ("sure, on average, that its guesses land within 5 %"
                                       if pred.get("source") != "mcp" else "the MCP's own confidence")
+        if pred.get("isolated"):
+            summary["confidence_note"] += f", from only the {pred.get('sims_used')} runs in {pred['isolated']}"
     summary |= {"headline_label": "WHAT IT CHANGES" + (f" FROM {base_title.upper()}" if base_title else ""),
                 "headline": change or "—"}
     guesses = loads(pred.get("predicted_json"), {})

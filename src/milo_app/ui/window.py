@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from milo_app import graph, predict, services
 from milo_app.config import ASSETS, get_settings
-from milo_app.ui import theme
+from milo_app.ui import prefs, theme
 from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
 from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows, prediction_summary, relationship_summary
@@ -313,6 +313,10 @@ class MainWindow(QMainWindow):
         self._calc_again = False
         self.recalculated.connect(self._data_changed)
         self.drawer_node: str | None = None  # the node the side panel is showing
+        # campaigns whose ghosts are worked out from their own runs only (a view: nothing is stored)
+        saved = prefs.store().value("isolated_campaigns", [])
+        self.isolated: set[str] = set(saved) if isinstance(saved, list) else {saved} if saved else set()
+        self._isolated_cache: dict[str, tuple[tuple, list[dict]]] = {}
 
         self.setWindowTitle("MILO")
         self.setWindowIcon(QIcon(str(ASSETS / "milo.ico")))
@@ -383,6 +387,7 @@ class MainWindow(QMainWindow):
         self.info = NodeInfo()
         self.info.closed.connect(lambda: self.canvas.select_node(None))
         self.info.sim_clicked.connect(self._open_id)
+        self.info.isolate_toggled.connect(self._toggle_isolate)
         self.drawer = Drawer(self.canvas, self.detail, self.info)
 
         middle = QWidget()
@@ -515,6 +520,7 @@ class MainWindow(QMainWindow):
                            "alpha": 200} for d in descriptor_ids[key]]
 
         campaign_by_sim = {s["bundle_id"]: graph.campaign_of(s) for s in sims}
+        predictions = self._with_isolated(predictions, campaign_by_sim)
         ghost_rings: dict[str, list[str]] = {}
         for pred in predictions:
             if not set(pred["based_on"]) & shown_sims:
@@ -541,7 +547,8 @@ class MainWindow(QMainWindow):
             if name and s["bundle_id"] in shown_sims:
                 rings.setdefault(name, []).append(s["bundle_id"])
         self.canvas.set_campaigns([{"name": n, "color": campaign_color(n), "sims": ids,
-                                    "ghosts": ghost_rings.get(n, []) if "prediction" in shown else []}
+                                    "ghosts": ghost_rings.get(n, []) if "prediction" in shown else [],
+                                    "spinning": n in self.isolated}
                                    for n, ids in rings.items()] if "sim" in shown else [])
         hints = []
         if "descriptor" in shown and not self.descriptors.active:
@@ -627,11 +634,61 @@ class MainWindow(QMainWindow):
             base = pred.get("base") or (pred.get("based_on") or [None])[0]
             row = next((r for r in graph.descriptor_table(self.driver) if r["id"] == base), None)
             summary = prediction_summary(pred, row["values"] if row else None, short_title(self._titles.get(base, ""), 28))
+            home = {graph.campaign_of(s) for s in graph.list_simulations(self.driver) if s["bundle_id"] in (pred.get("based_on") or [])}
+            campaign = next(iter(home)) if len(home) == 1 else None
+            if campaign and pred.get("source") in ("calculation", None):
+                summary["isolate"] = {"campaign": campaign, "on": campaign in self.isolated}
         elif kind == "relationship":
             summary = relationship_summary(data["rel"])
         self.info.show_node(kind, titles[kind](), node_rows(data, models, self._titles), sims, summary)
         self.drawer.show_page(1)
         self._keep_in_view(data["id"])
+
+    # ---- isolated campaigns
+
+    def _with_isolated(self, predictions: list[dict], campaign_by_sim: dict[str, str | None]) -> list[dict]:
+        """For each isolated campaign, its calculated ghosts are replaced by ones worked out from its own
+        runs only (predict.calculate over just those runs; kept in memory, never stored)."""
+        if not self.isolated:
+            return predictions
+        table = None
+        for name in sorted(self.isolated):
+            members = {b for b, c in campaign_by_sim.items() if c == name}
+            if not members:
+                continue
+            predictions = [p for p in predictions
+                           if not (p.get("source") == "calculation" and set(p.get("based_on") or []) <= members)]
+            table = table if table is not None else graph.descriptor_table(self.driver)
+            rows = [r for r in table if r["id"] in members]
+            key = tuple(sorted((r["id"], r.get("fingerprint")) for r in rows))
+            cached = self._isolated_cache.get(name)
+            if cached is None or cached[0] != key:
+                ghosts = predict.calculate(rows, self.settings.ghosts)["ghosts"] if rows else []
+                cached = (key, [g | {"id": "iso-" + g["id"], "source": "calculation", "isolated": name} for g in ghosts])
+                self._isolated_cache[name] = cached
+            predictions = predictions + cached[1]
+        return predictions
+
+    def _toggle_isolate(self, campaign: str, on: bool) -> None:
+        """Isolate a campaign (or stop): redraw, and keep the panel on the same ghost (same run, same knob)."""
+        node = self.canvas.nodes.get(self.drawer_node or "")
+        pred = node.data_.get("pred") if node is not None else None
+        (self.isolated.add if on else self.isolated.discard)(campaign)
+        prefs.store().setValue("isolated_campaigns", sorted(self.isolated))
+        self.redraw()
+        if pred is None:
+            return
+        # the same run and knob if it still has a ghost, else another ghost of the same run, else of the campaign
+        ghosts = [(k, n) for k, n in self.canvas.nodes.items() if n.data_.get("pred")]
+        for match in (lambda p: p.get("base") == pred.get("base") and p.get("changed") == pred.get("changed"),
+                      lambda p: p.get("base") == pred.get("base"),
+                      lambda p: (p.get("isolated") == campaign) if on else False):
+            for key, other in ghosts:
+                if match(other.data_["pred"]):
+                    self.canvas.select_node(key)
+                    self._show_node(other.data_)
+                    return
+        self._hide_node()
 
     def _keep_in_view(self, key: str) -> None:
         """Once the drawer has slid in, make sure the tapped node is not hidden under it."""

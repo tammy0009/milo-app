@@ -11,7 +11,8 @@ seconds after anything changes and then rests. Drag a node to move it, drag the 
 pan, wheel to zoom. Clicking a node selects it and a little arrow fades in where you clicked (kept
 inside the node), then fades away. Double-clicking anywhere on a node opens the side panel.
 
-A campaign with runs on screen gets a slowly spinning dotted ring around them, in its color. Grab the
+A campaign with runs on screen gets a dotted ring around them and their ghosts, in its color; it
+turns slowly while the campaign is isolated (its ghosts worked out from its own runs only). Grab the
 ring to move all of the campaign's runs at once.
 """
 from __future__ import annotations
@@ -412,17 +413,19 @@ class CampaignRing(QGraphicsObject):
     the ring itself takes the mouse (a band along it): grab it to move every run of the campaign at
     once; inside it, nodes and the background work as usual."""
 
-    def __init__(self, name: str, color: str, sims: list[Node], canvas: "GraphView") -> None:
-        """sims: the campaign's runs on screen and their ghosts: everything the ring holds and moves."""
+    def __init__(self, name: str, color: str, sims: list[Node], canvas: "GraphView", spinning: bool = False) -> None:
+        """sims: the campaign's runs on screen and their ghosts: everything the ring holds and moves.
+        spinning: the campaign is isolated."""
         super().__init__()
-        self.name, self.sims, self.canvas = name, sims, canvas
+        self.name, self.sims, self.canvas, self.spinning = name, sims, canvas, spinning
         self.color = QColor(color)
         self.radius = 0.0
         self.turn = 0.0  # how far the dots have travelled round
         self._grab: QPointF | None = None
         self.setZValue(-1)  # under links and nodes
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip(f"{name}\nDrag the ring to move its runs together")
+        self.setToolTip(f"{name}" + ("\nIsolated: its ghosts use only its own runs" if spinning else "")
+                        + "\nDrag the ring to move its runs together")
         self.fit()
 
     def fit(self) -> None:
@@ -592,7 +595,7 @@ class GraphView(QGraphicsView):
 
     def set_campaigns(self, campaigns: list[dict[str, Any]]) -> None:
         """A ring for each campaign with runs on screen, round its runs and their ghosts:
-        [{"name", "color", "sims": [bundle ids], "ghosts": [ghost node ids]}]."""
+        [{"name", "color", "sims": [bundle ids], "ghosts": [ghost node ids], "spinning": isolated}]."""
         for ring in self.rings.values():
             self.graph_scene.removeItem(ring)
         self.rings = {}
@@ -600,17 +603,19 @@ class GraphView(QGraphicsView):
             sims = [self.nodes[s] for s in campaign["sims"] if isinstance(self.nodes.get(s), SimNode)]
             ghosts = [self.nodes[g] for g in campaign.get("ghosts", []) if isinstance(self.nodes.get(g), PredictionNode)]
             if sims:
-                ring = CampaignRing(campaign["name"], campaign["color"], sims + ghosts, self)
+                ring = CampaignRing(campaign["name"], campaign["color"], sims + ghosts, self, campaign.get("spinning", False))
                 self.graph_scene.addItem(ring)
                 self.rings[campaign["name"]] = ring
-        if self.rings and not self.spinner.isActive():
-            self.spinner.start()
-        elif not self.rings:
+        if any(r.spinning for r in self.rings.values()):
+            if not self.spinner.isActive():
+                self.spinner.start()
+        else:
             self.spinner.stop()
 
     def _spin(self) -> None:
         for ring in self.rings.values():
-            ring.spin(G["ring_speed"])
+            if ring.spinning:
+                ring.spin(G["ring_speed"])
 
     def open_node(self, node: Node) -> None:
         self.node_opened.emit(node.data_)
