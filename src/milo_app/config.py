@@ -31,6 +31,9 @@ class Settings:
     drop_dir: Path
     scan_seconds: float
     ghosts: int  # calculated ghosts per real run, for each knob (ghost.md 4.3)
+    drop_dir_vm: str  # the drop folder as the BIOVIA VM sees it: baked into the scripts the MCP writes
+    docs_dir: Path  # the BIOVIA documentation dumps the MCP searches
+    data_dir: Path  # where the MCP keeps its docs index and the scripts it wrote
 
 
 def get_settings() -> Settings:
@@ -43,4 +46,7 @@ def get_settings() -> Settings:
         drop_dir=Path(env("MILO_DROP_DIR", r"C:\milo_drop")),
         scan_seconds=float(env("MILO_SCAN_SECONDS", "3")),
         ghosts=int(env("MILO_GHOSTS", "1")),
+        drop_dir_vm=env("MILO_DROP_DIR_VM", r"C:\milo_drop"),
+        docs_dir=Path(env("MILO_DOCS_DIR", str(Path.home() / "Documents" / "biovia"))),
+        data_dir=Path(env("MILO_DATA_DIR", str(DATA))),
     )

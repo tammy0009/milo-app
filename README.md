@@ -46,6 +46,8 @@ data, and the next launch finds them already up.
 | `src/milo_app/watcher.py` | Watches the drop folder and ingests new or changed bundles |
 | `src/milo_app/graph.py` | The Neo4j graph model, ingestion, and queries |
 | `src/milo_app/predict.py` | Calculated ghost nodes: the model, the candidates, the confidence |
+| `src/milo_app/blind.py` | Blind tests: every new run predicted before it is added, then checked |
+| `src/milo_app/mcp/` | The MILO MCP: script writing, docs search, script checks, graph tools |
 | `src/milo_app/services.py` | Starts Docker (clearing the stale socket files that block it) and Neo4j |
 | `src/milo_app/bundle.py` | Reads a bundle folder: the ingestion contract, copied from `..\milo` |
 | `.env` | Database address and password, drop folder, scan interval |
@@ -104,3 +106,19 @@ check is remembered between launches.
 
 Neo4j Browser: http://localhost:7475 (user `neo4j`, password `milo-app-password`), Bolt on 7688.
 The old MILO database (`milo-neo4j`, 7474/7687) is separate and untouched.
+
+## MILO MCP
+
+The MCP lives here too (`src/milo_app/mcp/`): it writes BIOVIA scripts (Materials Studio Python,
+Discovery Studio Perl) whose output is a MILO bundle, searches the BIOVIA docs, checks scripts before
+they go to the VM, and reads and adds to this app's graph (`milo_graph_data`, `milo_add_prediction`,
+`milo_remove_prediction`). It is a local stdio server; Claude Code runs it with:
+
+```powershell
+claude mcp add milo -s user -- C:\Users\jroma\.local\bin\uv.exe --directory C:\Users\jroma\cra\milo-app run milo-mcp
+```
+
+Its docs index (`data/docs.sqlite`, rebuilt with `milo_index_docs` from `MILO_DOCS_DIR`) and the scripts
+it writes (`data/generated_scripts/`) stay in `data/`. `milo_check_script` runs a script against a
+stand-in for BIOVIA in a temporary folder that is deleted afterwards: it checks the script's structure
+and bundle, and nothing it produces ever reaches the drop folder or the graph.
