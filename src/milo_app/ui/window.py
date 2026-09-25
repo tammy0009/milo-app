@@ -303,6 +303,7 @@ class Detail(QWidget):
 
 class MainWindow(QMainWindow):
     recalculated = Signal()  # the ghost calculator finished (it runs on its own thread)
+    data_read = Signal(int, object)  # a background read of the graph finished: (its number, what it read)
 
     def __init__(self) -> None:
         super().__init__()
@@ -315,6 +316,12 @@ class MainWindow(QMainWindow):
         self._calc_lock = threading.Lock()
         self._calc_again = False
         self.recalculated.connect(self._data_changed)
+        # What only changes when runs arrive or leave, or the ghosts are recalculated, is read once then
+        # (on a thread, so the window never waits for Neo4j) and kept: _read_data / _show_data.
+        self.data: dict[str, Any] = {"groups": [], "sims": [], "relationships": [], "models": [], "table": [], "tests": []}
+        self._links: dict[str, list] = {}  # descriptor group -> graph.descriptor_links, read on first use
+        self._reads = 0  # the newest background read; an older one finishing late is dropped
+        self.data_read.connect(self._on_data_read)
         self.drawer_node: str | None = None  # the node the side panel is showing
         # campaigns whose ghosts are worked out from their own runs only (a view: nothing is stored)
         saved = prefs.store().value("isolated_campaigns", [])
@@ -433,7 +440,8 @@ class MainWindow(QMainWindow):
         self.starter.start()
 
     def on_ready(self) -> None:
-        self.reload()
+        self._show_data(self._read_data())  # the first time, read before showing the graph
+        self._recalculate()
         self.stack.setCurrentIndex(1)
         self.watcher = Watcher(self.driver, self.settings.drop_dir, self.settings.scan_seconds)
         self.watcher.ingested.connect(self.on_ingested)
@@ -459,13 +467,46 @@ class MainWindow(QMainWindow):
         self._recalculate()
 
     def _data_changed(self) -> None:
-        """The data or its calculation changed: refresh everything that shows it. (Ticking a
-        descriptor only needs redraw().)"""
-        self.descriptors.set_groups(graph.descriptor_groups(self.driver))
-        self.descriptors.set_sims(graph.with_redos(graph.list_simulations(self.driver)))
+        """The data or its calculation changed: read it again on a thread, then refresh everything that
+        shows it (_show_data). (Ticking a descriptor only needs redraw().)"""
+        self._reads += 1
+        number = self._reads
+
+        def work() -> None:
+            try:
+                data = self._read_data()
+            except Exception as exc:  # noqa: BLE001 - Neo4j went away: say so, keep showing the last read
+                data = exc
+            self.data_read.emit(number, data)
+
+        threading.Thread(target=work, name="milo-read", daemon=True).start()
+
+    def _read_data(self) -> dict[str, Any]:
+        """Everything that changes only when runs arrive or leave or the ghosts are recalculated.
+        (Ghosts themselves are read on every redraw: the MCP adds and removes them from outside.)"""
+        return {"groups": graph.descriptor_groups(self.driver),
+                "sims": graph.with_redos(graph.list_simulations(self.driver)),
+                "relationships": graph.list_relationships(self.driver),
+                "models": graph.list_models(self.driver),
+                "table": graph.descriptor_table(self.driver),
+                "tests": graph.list_tests(self.driver)}
+
+    def _on_data_read(self, number: int, data: Any) -> None:
+        if number != self._reads:
+            return  # a newer read is on its way
+        if isinstance(data, Exception):
+            self.statusBar().showMessage(f"Could not read the graph: {data}", 12000)
+            return
+        self._show_data(data)
+
+    def _show_data(self, data: dict[str, Any]) -> None:
+        self.data = data
+        self._links = {}
+        self.descriptors.set_groups(data["groups"])
+        self.descriptors.set_sims(data["sims"])
         self.redraw()
-        self.formulas.set_data(graph.descriptor_table(self.driver), graph.list_relationships(self.driver), self._titles)
-        self.formulas.set_track(graph.list_tests(self.driver))
+        self.formulas.set_data(data["table"], data["relationships"], self._titles)
+        self.formulas.set_track(data["tests"])
 
     def _recalculate(self) -> None:
         if not self._calc_lock.acquire(blocking=False):
@@ -487,13 +528,13 @@ class MainWindow(QMainWindow):
 
     def redraw(self) -> None:
         """Build every node and link, then show only the kinds switched on in the type bar."""
-        sims = graph.with_redos(graph.list_simulations(self.driver))
+        sims = self.data["sims"]
         self._titles = {s["bundle_id"]: str(s.get("title") or s["bundle_id"]) for s in sims}
-        relationships = graph.list_relationships(self.driver)
+        relationships = self.data["relationships"]
         self._relationships = relationships
         predictions = graph.list_predictions(self.driver)
         self._models = {}
-        for m in graph.list_models(self.driver):
+        for m in self.data["models"]:
             for alias in m.get("aliases") or [m["descriptor"]]:
                 self._models.setdefault(alias, []).append(m)
         # The Sim Feed says which runs are on the graph; the rest, and their ghosts, are left off.
@@ -582,7 +623,9 @@ class MainWindow(QMainWindow):
         1.0000011) read the same, so they share a node; the exact values stay in its details."""
         name = key.partition(":")[2]
         shown: dict[str, tuple[list[str], list[str]]] = {}  # label -> (sim ids, exact values)
-        for value_json, units, bundle_id in graph.descriptor_links(self.driver, key):
+        if key not in self._links:
+            self._links[key] = graph.descriptor_links(self.driver, key)
+        for value_json, units, bundle_id in self._links[key]:
             if bundle_id not in shown_sims:
                 continue
             label = f"{pretty_name(name)} = {quantity(value_json, units)}"
@@ -636,9 +679,9 @@ class MainWindow(QMainWindow):
         if kind == "prediction":
             pred = data["pred"]
             base = pred.get("base") or (pred.get("based_on") or [None])[0]
-            row = next((r for r in graph.descriptor_table(self.driver) if r["id"] == base), None)
+            row = next((r for r in self.data["table"] if r["id"] == base), None)
             summary = prediction_summary(pred, row["values"] if row else None, short_title(self._titles.get(base, ""), 28))
-            home = {graph.campaign_of(s) for s in graph.list_simulations(self.driver) if s["bundle_id"] in (pred.get("based_on") or [])}
+            home = {graph.campaign_of(s) for s in self.data["sims"] if s["bundle_id"] in (pred.get("based_on") or [])}
             campaign = next(iter(home)) if len(home) == 1 else None
             if campaign and pred.get("source") in ("calculation", None):
                 summary["isolate"] = {"campaign": campaign, "on": campaign in self.isolated}
@@ -668,7 +711,7 @@ class MainWindow(QMainWindow):
                 continue
             predictions = [p for p in predictions
                            if not (p.get("source") == "calculation" and set(p.get("based_on") or []) <= members)]
-            table = table if table is not None else graph.descriptor_table(self.driver)
+            table = table if table is not None else self.data["table"]
             rows = [r for r in table if r["id"] in members]
             key = tuple(sorted((r["id"], r.get("fingerprint")) for r in rows))
             cached = self._isolated_cache.get(name)
