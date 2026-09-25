@@ -68,8 +68,9 @@ class Node(QGraphicsObject):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged and not value:
             self.handle.vanish()
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            for edge in self.edges:
-                edge.adjust()
+            if not self.canvas.ticking:  # a tick moves every link once, after all the nodes
+                for edge in self.edges:
+                    edge.adjust()
             if self.held:
                 self.canvas.reheat(0.3)
                 for ring in self.canvas.rings.values():
@@ -223,6 +224,8 @@ class DescriptorNode(Node):
         self.prepareGeometryChange()
         self.w = min(G["desc_max_width"], wide + 40)  # 24 px dot side + 12 px end + slack
         self.h = G["desc_height"]
+        # as it fits between the dot and the end (the text box in paint(): 24 px in, 12 px from the end)
+        self.shown = QFontMetrics(self.value_font).elidedText(self.value, Qt.TextElideMode.ElideRight, int(self.w - 36))
         self.setToolTip(desc["tooltip"])
         self.update()
 
@@ -249,8 +252,7 @@ class DescriptorNode(Node):
         text = rect.adjusted(24, 0, -12, 0)
         painter.setFont(self.value_font)
         painter.setPen(QColor(G["desc_ink"]))
-        value = QFontMetrics(self.value_font).elidedText(self.value, Qt.TextElideMode.ElideRight, int(text.width()))
-        painter.drawText(text, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, value)
+        painter.drawText(text, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.shown)
 
 
 class RelationshipNode(Node):
@@ -269,6 +271,7 @@ class RelationshipNode(Node):
                ([f"{sure:.0%} sure"] if isinstance(sure, (int, float)) else [])
         self.label = " · ".join(bits) or "relationship"
         self.label_w = min(200, QFontMetrics(self.label_font).horizontalAdvance(self.label) + 4)
+        self.shown = QFontMetrics(self.label_font).elidedText(self.label, Qt.TextElideMode.ElideRight, int(self.label_w))
         self.setToolTip(self.name + (f"\n{self.label}" if bits else ""))
         self.prepareGeometryChange()
         self.update()
@@ -287,9 +290,8 @@ class RelationshipNode(Node):
         painter.drawPolygon(diamond)
         painter.setFont(self.label_font)
         painter.setPen(QColor(theme.COLORS["ink"]))
-        text = QFontMetrics(self.label_font).elidedText(self.label, Qt.TextElideMode.ElideRight, int(self.label_w))
         painter.drawText(QRectF(-self.label_w / 2, s + 3, self.label_w, G["rel_label_px"] + 4),
-                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
+                         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.shown)
 
 
 class PredictionNode(Node):
@@ -498,6 +500,9 @@ class GraphView(QGraphicsView):
         self.setObjectName("Graph")
         self.graph_scene = QGraphicsScene(self)
         self.graph_scene.setSceneRect(-50000, -50000, 100000, 100000)
+        # No spatial index: during a settle every node and link moves each tick, and re-sorting an
+        # index of thousands of items every time costs far more than it saves on clicks.
+        self.graph_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.graph_scene.setBackgroundBrush(QBrush(QColor(G["canvas"])))
         self.graph_scene.selectionChanged.connect(self._on_selection)
         self.setScene(self.graph_scene)
@@ -518,6 +523,7 @@ class GraphView(QGraphicsView):
         self.spinner.timeout.connect(self._spin)
         self.search = ""
         self.alpha = 0.0
+        self.ticking = False  # inside _tick: nodes leave their links for the tick to move
         self._fit_pending = True
         self.timer = QTimer(self)
         self.timer.setInterval(layout.TICK_MS)
@@ -711,10 +717,16 @@ class GraphView(QGraphicsView):
         edges = np.array([(index[e.a.key], index[e.b.key]) for e in self.edges], dtype=int).reshape(-1, 2)
         groups = [np.array([index[m.key] for m in ring.sims if m.key in index], dtype=int) for ring in self.rings.values()]
         x, y, vx, vy = layout.step(x, y, vx, vy, held, edges, groups, self.alpha)
-        for i, node in enumerate(nodes):
-            node.vx, node.vy = float(vx[i]), float(vy[i])
-            if not node.held:
-                node.setPos(float(x[i]), float(y[i]))
+        self.ticking = True
+        try:
+            for i, node in enumerate(nodes):
+                node.vx, node.vy = float(vx[i]), float(vy[i])
+                if not node.held:
+                    node.setPos(float(x[i]), float(y[i]))
+        finally:
+            self.ticking = False
+        for edge, (i, j) in zip(self.edges, edges.tolist()):
+            edge.setLine(float(x[i]), float(y[i]), float(x[j]), float(y[j]))
         for ring in self.rings.values():
             ring.fit()
 
