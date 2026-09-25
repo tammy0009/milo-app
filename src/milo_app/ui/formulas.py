@@ -24,7 +24,7 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSplitter,
+    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSplitter,
     QSizePolicy, QStyleOptionViewItem, QToolTip, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator,
     QVBoxLayout, QWidget,
 )
@@ -144,6 +144,30 @@ class FitChart(QWidget):
             QToolTip.hideText()
 
 
+class Tile(QFrame):
+    """One number that matters, big, with a line saying what it is."""
+
+    def __init__(self) -> None:
+        super().__init__(objectName="Tile")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.value = QLabel(objectName="TileValue")
+        self.caption = QLabel(objectName="FieldName", wordWrap=True)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(14, 10, 14, 12)
+        box.setSpacing(2)
+        box.addWidget(self.value)
+        box.addWidget(self.caption)
+
+    def set(self, value: str, caption: str, color: str | None = None) -> None:
+        self.value.setText(value)
+        self.value.setStyleSheet(f"color: {color};" if color else "")
+        self.caption.setText(caption)
+
+
+def _span(color: str, text: str) -> str:
+    return f"<b style='color:{color}'>{text}</b>"
+
+
 class FormulaView(QWidget):
     recolored = Signal()  # a campaign got a new color here
 
@@ -206,9 +230,6 @@ class FormulaView(QWidget):
         self.hint = QLabel(objectName="Empty", wordWrap=True)
         self.solve = QComboBox()
         self.solve.currentIndexChanged.connect(lambda _i: self._recompute())
-        solve_row = QHBoxLayout()
-        solve_row.addWidget(QLabel("Solve for", objectName="FieldName"))
-        solve_row.addWidget(self.solve, 1)
         self.formula = QLabel(objectName="Formula")
         self.store = prefs.store()
         self.symbolic = QPushButton("Symbols", objectName="Chip", checkable=True)
@@ -217,10 +238,13 @@ class FormulaView(QWidget):
         self.symbolic.toggled.connect(self._toggle_symbols)
         self.copy = QPushButton("Copy LaTeX")
         self.copy.clicked.connect(self._copy_latex)
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        buttons.addWidget(self.symbolic)
-        buttons.addWidget(self.copy)
+        solve_row = QHBoxLayout()
+        solve_row.setSpacing(10)
+        solve_row.addWidget(QLabel("Solve for", objectName="FieldName"))
+        solve_row.addWidget(self.solve, 1)
+        solve_row.addSpacing(12)
+        solve_row.addWidget(self.symbolic)
+        solve_row.addWidget(self.copy)
         self.legend = QGridLayout()  # symbol | name | units, shown in symbol mode
         self.legend.setHorizontalSpacing(12)
         self.legend.setVerticalSpacing(0)
@@ -230,20 +254,39 @@ class FormulaView(QWidget):
         legend_row.addStretch()
         formula_row = QVBoxLayout()
         formula_row.setSpacing(10)
-        formula_row.addLayout(buttons)
         formula_row.addWidget(self.formula)
         formula_row.addLayout(legend_row)
-        self.facts = QGridLayout()
+        # three tiles under the formula: how sure the link is real, how much it explains, the runs
+        self.tiles = {key: Tile() for key in ("sure", "explains", "runs")}
+        tiles = QHBoxLayout()
+        tiles.setSpacing(12)
+        for tile in self.tiles.values():
+            tiles.addWidget(tile, 1)
+        # what it says, in words: one sentence per explaining descriptor, with how sure that link is
+        self.says_title = QLabel("WHAT IT SAYS", objectName="KindLabel")
+        self.says = QGridLayout()
+        self.says.setHorizontalSpacing(14)
+        self.says.setVerticalSpacing(8)
+        self.says.setColumnStretch(0, 1)
+        # everything else, on request
+        self.math = QPushButton("Show the math", objectName="Chip", checkable=True)
+        self.math.toggled.connect(self._toggle_math)
+        self.math_box = QWidget()
+        self.facts = QGridLayout(self.math_box)
+        self.facts.setContentsMargins(0, 0, 0, 0)
         self.facts.setHorizontalSpacing(14)
         self.facts.setVerticalSpacing(6)
         self.facts.setColumnStretch(1, 1)
+        self.math_box.hide()
         self.chart = FitChart()
-        self.calc_title = QLabel("CALCULATOR", objectName="PanelTitle")
+        self.calc_title = QLabel("CALCULATOR", objectName="KindLabel")
         self.calc_inputs = QGridLayout()
         self.calc_inputs.setHorizontalSpacing(10)
         self.calc_inputs.setColumnStretch(2, 1)  # keep each box next to its name
-        self.calc_result = QLabel(wordWrap=True)
-        self.calc_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.calc_value = QLabel(objectName="Headline", wordWrap=True)  # the guess
+        self.calc_detail = QLabel(objectName="FieldName", wordWrap=True)  # its range, and how sure
+        for label in (self.calc_value, self.calc_detail):
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._calc_fields: dict[str, QLineEdit] = {}
 
         self.body = QWidget()
@@ -252,11 +295,19 @@ class FormulaView(QWidget):
         body.setSpacing(12)
         body.addLayout(solve_row)
         body.addLayout(formula_row)
-        body.addLayout(self.facts)
+        body.addLayout(tiles)
+        body.addSpacing(4)
+        body.addWidget(self.says_title)
+        body.addLayout(self.says)
         body.addWidget(self.chart)
+        body.addSpacing(4)
         body.addWidget(self.calc_title)
         body.addLayout(self.calc_inputs)
-        body.addWidget(self.calc_result)
+        body.addWidget(self.calc_value)
+        body.addWidget(self.calc_detail)
+        body.addSpacing(4)
+        body.addWidget(self.math, 0, Qt.AlignmentFlag.AlignLeft)
+        body.addWidget(self.math_box)
         body.addStretch()
 
         page = QWidget(objectName="Detail")
@@ -385,12 +436,15 @@ class FormulaView(QWidget):
         inside = sum(t.get("inside") or 0 for t in done)
         stated = [t["stated"] * t["values"] for t in done if isinstance(t.get("stated"), (int, float)) and t.get("values")]
         expected = sum(stated) / values if values and stated else None
-        text = (f"{len(done)} run{'s' if len(done) != 1 else ''}{where} predicted blind before arriving.\n"
-                f"Values right (within 5 %): {right} of {values} ({right / values:.0%})"
-                + (f"; confidence said {expected:.0%}" if expected is not None else "") + ".")
+        # one line: how the blind predictions came out, the share right colored red (poor) to green (good)
+        parts = [f"<b>{len(done)}</b> run{'s' if len(done) != 1 else ''}{where} predicted blind",
+                 _span(theme.confidence_color(right / values), f"{right / values:.0%}") + " of values right"
+                 + (f" (it expected {expected:.0%})" if expected is not None else "")]
         if ranged:
-            text += f"\nNumbers inside their 90 % ranges: {inside} of {ranged} ({inside / ranged:.0%}; should be about 90 %)."
-        self.track.setText(text)
+            parts.append(f"<b>{inside / ranged:.0%}</b> inside their 90 % ranges (should be about 90 %)")
+        self.track.setText(" &nbsp;·&nbsp; ".join(parts))
+        self.track.setToolTip(f"Values right (within 5 %): {right} of {values}\n"
+                              f"Numbers inside their 90 % ranges: {inside} of {ranged}")
 
     def _on_item(self, item: QTreeWidgetItem, _column: int) -> None:
         key = item.data(0, KEY_ROLE)
@@ -436,7 +490,7 @@ class FormulaView(QWidget):
         self.hint.setText(hint)
         self.hint.setVisible(bool(hint))
         self.body.setVisible(self.fit is not None or len(self.checked) >= 2)
-        for layout in (self.facts, self.calc_inputs):
+        for layout in (self.facts, self.calc_inputs, self.says):
             while layout.count():
                 widget = layout.takeAt(0).widget()
                 if widget:
@@ -451,8 +505,10 @@ class FormulaView(QWidget):
             self.chart.show_fit(None, self.titles)
             self.chart.hide()
             self.calc_title.hide()
-            self.calc_result.setText("")
+            self.calc_value.setText("")
+            self.calc_detail.setText("")
             return
+        self._fill_tiles_and_words(fit)
         units = f" {units_text(fit['units'])}" if fit.get("units") else ""
         terms = " ".join(f"{signed(s)} × {name(k)}" for k, s in zip(fit["predictors"], fit["slopes"]))
         plain = f"{name(fit['target'])} = {number(fit['intercept'])} {terms}{units}"
@@ -548,33 +604,97 @@ class FormulaView(QWidget):
     def _calculate(self) -> None:
         fit = self.fit
         if fit is None or not self._calc_fields:
-            self.calc_result.setText("")
+            self.calc_value.setText("")
+            self.calc_detail.setText("")
             return
         try:
             values = {k: float(f.text().replace(",", "").strip()) for k, f in self._calc_fields.items()}
         except ValueError:
-            self.calc_result.setText("Type a number in every box.")
+            self.calc_value.setText("")
+            self.calc_detail.setText("Type a number in every box.")
             return
         g = predict.guess(fit, values)
         units = f" {units_text(fit['units'])}" if fit.get("units") else ""
         outside = [name(k) for k, v in values.items()
                    if not min(fit["inputs"][k]) <= v <= max(fit["inputs"][k])]
-        self.calc_result.setText(
-            f"{name(fit['target'])} ≈ {number(g['guess'], 5)}{units}\n"
-            f"90 % range {number(g['low'], 5)} – {number(g['high'], 5)}{units} · usually off by ± {number(g['typical_error'], 3)}{units}\n"
-            f"{g['confidence']:.0%} chance it lands within 5 % of the guess"
-            + (f"\nOutside the runs so far for {', '.join(outside)}: a straight line carried past the data." if outside else ""))
+        self.calc_value.setText(f"{name(fit['target'])} ≈ {number(g['guess'], 5)}{units}")
+        self.calc_detail.setText(
+            _span(theme.confidence_color(g["confidence"]), f"{g['confidence']:.0%}")
+            + f" chance it lands within 5 % &nbsp;·&nbsp; 90 % range {number(g['low'], 5)} – {number(g['high'], 5)}{units}"
+            + (f"<br>Outside the runs so far for {', '.join(outside)}: a straight line carried past the data."
+               if outside else ""))
 
-    def _relationship_text(self, a: str, b: str) -> str:
+    def _relationship(self, a: str, b: str) -> dict[str, Any] | None:
         for rel in self.relationships:
             a_keys, b_keys = rel.get("a_keys") or [rel.get("a")], rel.get("b_keys") or [rel.get("b")]
             if (a in a_keys and b in b_keys) or (a in b_keys and b in a_keys):
-                sure = rel.get("confidence")
-                if not isinstance(sure, (int, float)):
-                    return "not scored"
-                return (f"{sure:.0%} sure it is real (Efron's local false discovery rate, over {rel.get('n')} "
-                        f"runs{self._scope_words()})")
-        return "not scored yet"
+                return rel
+        return None
+
+    def _relationship_text(self, a: str, b: str) -> str:
+        rel = self._relationship(a, b)
+        if rel is None:
+            return "not scored yet"
+        sure = rel.get("confidence")
+        if not isinstance(sure, (int, float)):
+            return "not scored"
+        return (f"{sure:.0%} sure it is real (Efron's local false discovery rate, over {rel.get('n')} "
+                f"runs{self._scope_words()})")
+
+    def _fill_tiles_and_words(self, fit: dict[str, Any]) -> None:
+        """The tiles (how sure, how much it explains, runs) and one sentence per explaining descriptor:
+        how much the target moves across the range that descriptor was tried over."""
+        target, units = name(fit["target"]), (f" {units_text(fit['units'])}" if fit.get("units") else "")
+        several = len(fit["predictors"]) > 1
+        sures = []
+        row = 0
+        for k, s, e in zip(fit["predictors"], fit["slopes"], fit["slope_sd"]):
+            tried = fit["inputs"][k]
+            lo, hi = min(tried), max(tried)
+            move, err = s * (hi - lo), e * (hi - lo)
+            pu = f" {units_text(fit['predictor_units'].get(k))}" if fit["predictor_units"].get(k) else ""
+            way = "rises" if move > 0 else "falls"
+            text = (f"Across the {name(k).removeprefix('Requested ')} tried ({number(lo)} – {number(hi)}{pu}), {target} {way} by "
+                    f"{number(abs(move), 3)} ± {number(err, 3)}{units}"
+                    + (", the others held fixed" if several else "") + ".")
+            if err > abs(move):
+                text += " So far it could go either way."
+            sentence = QLabel(text, wordWrap=True)
+            sentence.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.says.addWidget(sentence, row, 0)
+            rel = self._relationship(fit["target"], k)
+            sure = rel.get("confidence") if rel else None
+            mark = QLabel(objectName="ChangeSure")
+            if isinstance(sure, (int, float)):
+                sures.append(sure)
+                mark.setText(f"{sure:.0%} sure")
+                mark.setStyleSheet(f"color: {theme.confidence_color(sure)};")
+                mark.setToolTip("how sure the link between these two is real, not chance")
+            else:
+                mark.setText("not scored")
+            mark.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            self.says.addWidget(mark, row, 1, Qt.AlignmentFlag.AlignTop)
+            row += 1
+        for k in fit.get("left_out") or []:
+            note = QLabel(f"{name(k).removeprefix('Requested ')} is the same in every one of these runs, so it cannot explain anything yet.",
+                          objectName="FieldName", wordWrap=True)
+            self.says.addWidget(note, row, 0, 1, 2)
+            row += 1
+        if sures:
+            weakest = min(sures)
+            self.tiles["sure"].set(f"{weakest:.0%}", "sure the link is real" if not several
+                                   else "sure the weakest link is real", theme.confidence_color(weakest))
+        else:
+            self.tiles["sure"].set("–", "not scored yet (needs 3 runs where both change)")
+        r2 = fit.get("r2")
+        self.tiles["explains"].set(f"{max(r2, 0):.0%}" if r2 is not None else "–",
+                                   f"of how {target} varies is explained",
+                                   theme.confidence_color(max(r2, 0)) if r2 is not None else None)
+        self.tiles["runs"].set(str(fit["n"]), f"runs used{self._scope_words()}")
+
+    def _toggle_math(self, on: bool) -> None:
+        self.math_box.setVisible(on)
+        self.math.setText("Hide the math" if on else "Show the math")
 
     def _apply_filter(self, text: str) -> None:
         text = text.strip().lower()

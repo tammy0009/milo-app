@@ -51,6 +51,7 @@ SIZES = {
     "drawer": 400,     # width of the side panel that slides over the graph
     "drawer_ms": 240,  # how long it takes to slide
     "sure_big": 34,    # a ghost's or relationship's confidence, at the top of its panel
+    "tile_value": 26,  # the big number on a Ghosts tab tile
     "headline": 15,    # what it changes / says, under that
     "confidence_bar": 6,
 }
@@ -182,6 +183,9 @@ QLabel#RunError {{ background: {fail_soft}; color: {fail}; border-radius: {radiu
 QLabel#RunRedone {{ background: {surface}; color: {muted}; border-radius: {radius}px; padding: 8px 10px;
                     font-size: {small}px; }}
 QLabel#TestSummary {{ background: {surface}; border-radius: {radius}px; padding: 8px 10px; font-size: {small}px; }}
+QFrame#Tile {{ background: {surface}; border-radius: {radius}px; }}
+QFrame#Tile QLabel {{ background: transparent; }}
+QLabel#TileValue {{ font-size: {tile_value}px; font-weight: bold; }}
 QLabel#Track {{ background: {surface}; border-radius: {radius}px; padding: 10px 12px; }}
 QLabel#Empty {{ color: {muted}; }}
 
@@ -193,6 +197,10 @@ QTabBar::tab:selected {{ color: {ink}; border-bottom: 2px solid {ink}; }}
 QWidget#Descriptors {{ background: transparent; }}
 QWidget#Descriptors QLineEdit {{ background: {ground}; }}
 QWidget#Descriptors QTreeWidget, QWidget#Descriptors QTreeWidget::viewport {{ background: transparent; }}
+QWidget#Descriptors QScrollBar:vertical {{ background: transparent; width: 14px; }}
+QWidget#Descriptors QScrollBar::handle:vertical {{ background: rgba(90, 90, 90, 125);
+                                                  border-radius: 7px; min-height: 44px; }}
+QWidget#Descriptors QScrollBar::handle:vertical:hover {{ background: rgba(65, 65, 65, 190); }}
 QLabel#PanelTitle {{ color: {muted}; font-size: {small}px; }}
 QTreeWidget {{ background: {surface}; border: none; }}
 QTreeWidget::item {{ padding: 3px 0; }}
