@@ -3,13 +3,19 @@
 It floats over the canvas instead of taking a column of its own, so the graph never jumps when
 it opens. A simulation shows its full record (the Detail view); any other node shows what it is
 and the simulations it is linked to (NodeInfo).
+
+Ghosts and relationships lead with what matters: how sure (a big percentage and a bar, red to
+green), then what changes. For a ghost, the knob it moves and what it expects to move with it, next
+to the run it came from; for a relationship, one sentence. All the math is one click away, under
+"Show the math".
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QStackedWidget, QVBoxLayout, QWidget,
@@ -20,6 +26,30 @@ from milo_app.ui.format import pretty_name, prior_text, sig, units_text
 
 KIND_NAMES = {"sim": "Simulation", "descriptor": "Descriptor", "relationship": "Relationship",
               "prediction": "Prediction"}
+
+
+class ConfidenceBar(QWidget):
+    """A thin bar filled to the confidence, in its color (red unsure, green sure)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFixedHeight(theme.SIZES["confidence_bar"])
+        self.value = 0.0
+
+    def set_value(self, value: float) -> None:
+        self.value = min(max(value, 0.0), 1.0)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt's name
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        r = self.height() / 2
+        painter.setBrush(QColor(theme.COLORS["line"]))
+        painter.drawRoundedRect(QRectF(self.rect()), r, r)
+        if self.value > 0:
+            painter.setBrush(QColor(theme.confidence_color(self.value)))
+            painter.drawRoundedRect(QRectF(0, 0, max(self.width() * self.value, 2 * r), self.height()), r, r)
 
 
 class NodeInfo(QWidget):
@@ -39,7 +69,42 @@ class NodeInfo(QWidget):
         head.addWidget(self.title, 1)
         head.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
 
-        self.grid = QGridLayout()
+        # the summary: confidence first, then what changes (ghosts and relationships)
+        self.summary = QWidget()
+        self.sure = QLabel(objectName="SureBig")
+        self.sure_note = QLabel(objectName="FieldName", wordWrap=True)
+        self.bar = ConfidenceBar()
+        self.headline_label = QLabel(objectName="KindLabel")
+        self.headline = QLabel(objectName="Headline", wordWrap=True)
+        self.headline.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.changes_label = QLabel(objectName="KindLabel")
+        self.changes = QGridLayout()
+        self.changes.setHorizontalSpacing(10)
+        self.changes.setVerticalSpacing(7)
+        self.changes.setColumnStretch(0, 1)
+        self.more = QLabel(objectName="FieldName", wordWrap=True)
+        sure_row = QHBoxLayout()
+        sure_row.setSpacing(10)
+        sure_row.addWidget(self.sure, 0, Qt.AlignmentFlag.AlignBottom)
+        sure_row.addWidget(self.sure_note, 1, Qt.AlignmentFlag.AlignBottom)
+        s = QVBoxLayout(self.summary)
+        s.setContentsMargins(0, 0, 0, 0)
+        s.setSpacing(8)
+        s.addLayout(sure_row)
+        s.addWidget(self.bar)
+        s.addSpacing(10)
+        s.addWidget(self.headline_label)
+        s.addWidget(self.headline)
+        s.addSpacing(8)
+        s.addWidget(self.changes_label)
+        s.addLayout(self.changes)
+        s.addWidget(self.more)
+        self.math = QPushButton("Show the math", objectName="Chip", checkable=True)
+        self.math.toggled.connect(self._toggle_math)
+
+        self.details = QWidget()
+        self.grid = QGridLayout(self.details)
+        self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(14)
         self.grid.setVerticalSpacing(6)
         self.grid.setColumnStretch(1, 1)
@@ -53,16 +118,27 @@ class NodeInfo(QWidget):
         box.addWidget(self.kind)
         box.addLayout(head)
         box.addSpacing(4)
-        box.addLayout(self.grid)
+        box.addWidget(self.summary)
+        box.addWidget(self.math, 0, Qt.AlignmentFlag.AlignLeft)
+        box.addWidget(self.details)
         box.addSpacing(10)
         box.addWidget(self.links_title)
         box.addLayout(self.links)
         box.addStretch()
 
-    def show_node(self, kind: str, title: str, rows: list[tuple[str, str]], sims: list[tuple[str, str]]) -> None:
-        """rows: (label, value) pairs; sims: (bundle_id, title) of the linked simulations."""
+    def show_node(self, kind: str, title: str, rows: list[tuple[str, str]], sims: list[tuple[str, str]],
+                  summary: dict[str, Any] | None = None) -> None:
+        """rows: (label, value) pairs; sims: (bundle_id, title) of the linked simulations. With a summary
+        (ghosts, relationships), it leads and the rows wait under "Show the math"."""
         self.kind.setText(KIND_NAMES.get(kind, kind).upper())
         self.title.setText(title)
+        self._fill_summary(summary)
+        self.summary.setVisible(summary is not None)
+        self.math.setVisible(summary is not None and bool(rows))
+        self.math.blockSignals(True)
+        self.math.setChecked(False)
+        self.math.blockSignals(False)
+        self.details.setVisible(summary is None)
         for layout in (self.grid, self.links):
             while layout.count():
                 widget = layout.takeAt(0).widget()
@@ -83,6 +159,50 @@ class NodeInfo(QWidget):
             link.setToolTip(f"{sim_title}\n{bundle_id}")
             link.clicked.connect(lambda _=False, b=bundle_id: self.sim_clicked.emit(b))
             self.links.addWidget(link)
+
+    def _toggle_math(self, on: bool) -> None:
+        self.details.setVisible(on)
+        self.math.setText("Hide the math" if on else "Show the math")
+
+    def _fill_summary(self, summary: dict[str, Any] | None) -> None:
+        while self.changes.count():
+            widget = self.changes.takeAt(0).widget()
+            if widget:
+                widget.deleteLater()
+        if summary is None:
+            return
+        sure = summary.get("confidence")
+        if isinstance(sure, (int, float)):
+            self.sure.setText(f"{sure:.0%}" if sure >= 0.01 or sure < 0.0005 else f"{sure:.1%}")
+            self.sure.setStyleSheet(f"color: {theme.confidence_color(sure)};")
+            self.bar.set_value(sure)
+        else:
+            self.sure.setText("–")
+            self.sure.setStyleSheet(f"color: {theme.COLORS['muted']};")
+            self.bar.set_value(0.0)
+        self.sure_note.setText(summary.get("confidence_note", ""))
+        self.headline_label.setText(summary.get("headline_label", ""))
+        self.headline.setText(summary.get("headline", ""))
+        self.headline_label.setVisible(bool(summary.get("headline_label")))
+        rows = summary.get("changes") or []
+        self.changes_label.setText(summary.get("changes_label", "") if rows else "")
+        self.changes_label.setVisible(bool(rows))
+        for i, row in enumerate(rows):
+            name = QLabel(row["name"], wordWrap=True)
+            name.setToolTip(row.get("tip", row["name"]))
+            move = QLabel(row["move"], objectName="ChangeValue", wordWrap=True)
+            move.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            move.setToolTip(row.get("tip", ""))
+            self.changes.addWidget(name, i, 0, Qt.AlignmentFlag.AlignTop)
+            self.changes.addWidget(move, i, 1, Qt.AlignmentFlag.AlignTop)
+            if isinstance(row.get("confidence"), (int, float)):
+                c = QLabel(f"{row['confidence']:.0%}", objectName="ChangeSure")
+                c.setStyleSheet(f"color: {theme.confidence_color(row['confidence'])};")
+                c.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+                c.setToolTip("how sure it is of this value (within 5 %)")
+                self.changes.addWidget(c, i, 2, Qt.AlignmentFlag.AlignTop)
+        self.more.setText(summary.get("more", ""))
+        self.more.setVisible(bool(summary.get("more")))
 
 
 class Drawer(QFrame):
@@ -273,6 +393,90 @@ def relationship_rows(r: dict[str, Any], titles: dict[str, str]) -> list[tuple[s
         ("Calculation", str(r.get("calc_id", ""))),
     ]
     return rows
+
+
+# ---------------------------------------------------------------------------- summaries (what leads the panel)
+
+CHANGES_SHOWN = 10  # the biggest expected changes listed; the rest are counted
+SAME_BELOW = 0.01  # a guess within 1 % of the run it came from counts as "about the same"
+
+
+def _move(before: Any, after: Any, units: Any) -> str:
+    return f"{_num(before, 4)} → {_num(after, 4)}{_units(units)}"
+
+
+def prediction_summary(pred: dict[str, Any], base: dict[str, tuple[Any, Any]] | None,
+                       base_title: str = "") -> dict[str, Any]:
+    """A ghost: how sure, the knob it moves, and what it expects to move with it (vs the run it came from)."""
+    from milo_app.ui.format import ghost_change
+
+    sure = pred.get("confidence")
+    _short, change = ghost_change(pred)
+    summary: dict[str, Any] = {"confidence": sure}
+    if pred.get("source") == "verified" and pred.get("values"):
+        summary |= {"confidence": pred["right"] / pred["values"],
+                    "confidence_note": f"came out right: {pred['right']} of {pred['values']} values within 5 % "
+                                       f"(it expected {pred['stated']:.0%})" if isinstance(pred.get("stated"), (int, float))
+                                       else f"came out right: {pred['right']} of {pred['values']} values within 5 %"}
+    else:
+        summary["confidence_note"] = ("sure, on average, that its guesses land within 5 %"
+                                      if pred.get("source") != "mcp" else "the MCP's own confidence")
+    summary |= {"headline_label": "WHAT IT CHANGES" + (f" FROM {base_title.upper()}" if base_title else ""),
+                "headline": change or "—"}
+    guesses = loads(pred.get("predicted_json"), {})
+    moves, same = [], 0
+    for key, g in guesses.items():
+        g = g if isinstance(g, dict) else {"guess": g}
+        full = key if ":" in key else f"output:{key}"
+        after = g.get("guess", g.get("value"))
+        before = (base or {}).get(full, (None, None))[0]
+        units = g.get("units")
+        if isinstance(after, (int, float)) and isinstance(before, (int, float)):
+            shift = abs(after - before) / max(abs(before), 1e-12)
+            if shift < SAME_BELOW:
+                same += 1
+                continue
+            moves.append((shift, {"name": _field(full), "move": _move(before, after, units), "confidence": g.get("confidence"),
+                                  "tip": f"{_field(full)}\nthe run: {_num(before, 6)}{_units(units)}\n"
+                                         f"this ghost: {_num(after, 6)}{_units(units)} ({(after - before) / max(abs(before), 1e-12):+.1%})"}))
+        elif base is None and isinstance(after, (int, float)):  # a ghost with no run to compare with
+            moves.append((0.0, {"name": _field(full), "move": f"{_num(after, 4)}{_units(units)}", "confidence": g.get("confidence")}))
+        # text (dates, titles, names) is bookkeeping, not a prediction: left to Show the math
+    # the changes it is sure of first (at least even odds), each group biggest first
+    moves.sort(key=lambda m: (-(isinstance(m[1].get("confidence"), (int, float)) and m[1]["confidence"] >= 0.5), -m[0]))
+    summary["changes_label"] = "WHAT IT EXPECTS TO CHANGE" if base else "WHAT IT EXPECTS"
+    summary["changes"] = [m for _s, m in moves[:CHANGES_SHOWN]]
+    extra = len(moves) - CHANGES_SHOWN
+    notes = []
+    if extra > 0:
+        notes.append(f"{extra} more change{'s' if extra != 1 else ''} (Show the math lists every guess)")
+    if same:
+        notes.append(f"{same} other value{'s' if same != 1 else ''} stay about the same (within 1 %)")
+    summary["more"] = "\n".join(notes)
+    return summary
+
+
+STRENGTH = ((0.9, "closely"), (0.6, "clearly"), (0.3, "loosely"), (0.0, "barely"))
+
+
+def relationship_summary(r: dict[str, Any]) -> dict[str, Any]:
+    """A relationship: how sure it is real, and in one sentence what it says."""
+    a, b = _field(r.get("a", "")), _field(r.get("b", ""))
+    sure = r.get("confidence")
+    n = r.get("n")
+    if "r" not in r:
+        headline = f"{a} and {b}: not enough runs where both change to tell"
+    else:
+        rho = r["r"]
+        word = next(w for limit, w in STRENGTH if abs(rho) >= limit)
+        way = "goes up" if rho > 0 else "goes down"
+        headline = f"When {a} goes up, {b} {way}, {word}."
+    note = ("sure the link is real, not chance" if "z" in r else "needs at least 3 runs where both change")
+    return {"confidence": sure if "z" in r else None, "confidence_note": note,
+            "headline_label": "WHAT IT SAYS", "headline": headline,
+            "changes": [], "more": (f"From {n} run{'s' if n != 1 else ''}"
+                                    + (f" · correlation r = {r['r']:+.2f}" if "r" in r else "")
+                                    + (" · a knob drives it" if r.get("kind") == "cause" else ""))}
 
 
 def _knob(key: str) -> str:

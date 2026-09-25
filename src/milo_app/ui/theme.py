@@ -50,6 +50,9 @@ SIZES = {
     "legend_row": 26,     # px, height of one legend row
     "drawer": 400,     # width of the side panel that slides over the graph
     "drawer_ms": 240,  # how long it takes to slide
+    "sure_big": 34,    # a ghost's or relationship's confidence, at the top of its panel
+    "headline": 15,    # what it changes / says, under that
+    "confidence_bar": 6,
 }
 
 # The graph canvas. Simulations are black circles; descriptor nodes are white pills edged in their
@@ -169,6 +172,10 @@ QPushButton#LinkButton:hover {{ background: {hover}; color: {ink}; }}
 QLabel#SimTitle {{ font-size: {title}px; font-weight: bold; }}
 QLabel#SimId {{ color: {muted}; font-size: {small}px; }}
 QLabel#FieldName {{ color: {muted}; font-size: {small}px; }}
+QLabel#SureBig {{ font-size: {sure_big}px; font-weight: bold; }}
+QLabel#Headline {{ font-size: {headline}px; font-weight: bold; }}
+QLabel#ChangeValue {{ color: {ink}; }}
+QLabel#ChangeSure {{ font-size: {small}px; font-weight: bold; }}
 QLabel#Problems {{ color: {warn}; font-size: {small}px; }}
 QLabel#RunError {{ background: {fail_soft}; color: {fail}; border-radius: {radius}px; padding: 8px 10px;
                    font-size: {small}px; }}

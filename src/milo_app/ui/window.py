@@ -31,8 +31,10 @@ from milo_app.config import ASSETS, get_settings
 from milo_app.ui import theme
 from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
-from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows
-from milo_app.ui.format import elapsed, ghost_title, pretty_name, quantity, shown_value, sig, size_text, test_summary
+from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows, prediction_summary, relationship_summary
+from milo_app.ui.format import (
+    elapsed, ghost_title, pretty_name, quantity, short_title, shown_value, sig, size_text, test_summary,
+)
 from milo_app.ui.formulas import FormulaView
 from milo_app.ui.graph_view import GraphView
 from milo_app.ui.typebar import TypeBar
@@ -619,7 +621,15 @@ class MainWindow(QMainWindow):
                   "prediction": lambda: data["pred"].get("based_on") or []}
         sims = [(s, self._titles.get(s, s)) for s in linked[kind]()]
         models = self._models.get(data.get("group"), []) if kind == "descriptor" else []
-        self.info.show_node(kind, titles[kind](), node_rows(data, models, self._titles), sims)
+        summary = None
+        if kind == "prediction":
+            pred = data["pred"]
+            base = pred.get("base") or (pred.get("based_on") or [None])[0]
+            row = next((r for r in graph.descriptor_table(self.driver) if r["id"] == base), None)
+            summary = prediction_summary(pred, row["values"] if row else None, short_title(self._titles.get(base, ""), 28))
+        elif kind == "relationship":
+            summary = relationship_summary(data["rel"])
+        self.info.show_node(kind, titles[kind](), node_rows(data, models, self._titles), sims, summary)
         self.drawer.show_page(1)
         self._keep_in_view(data["id"])
 
