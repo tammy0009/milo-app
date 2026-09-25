@@ -17,6 +17,22 @@ Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bun
 different knob settings). It is optional; a run that is not part of one has no `campaign` field. The
 app takes it in like any other field, so it is also a descriptor ("Campaign = PLA/PCL sweep").
 
+A campaign's runs can also sit in a folder of their own inside the drop folder:
+`C:\milo_drop\<campaign>\<bundle_id>\`. A bundle there belongs to that campaign; if its
+`bundle.json` names a different campaign, `bundle.json` wins and the mismatch is noted on the run.
+The MILO MCP's scripts deliver campaign runs into that folder themselves. A run made again because
+an earlier one failed names it in `redo_of`.
+
+**Failed runs** (a status other than `succeeded`, or an `error` recorded) are pointed out as soon as
+they arrive:
+- the status bar says which run failed and why;
+- on the graph they get a red ring and a "!" badge, and the line at the top counts them;
+- in Campaigns and the Sim Feed they are red and marked "failed";
+- a failed run's panel opens with its error and the end of its traceback.
+A failed run that a later run redid (`redo_of`) turns grey. The MCP's `milo_run_errors` lists them all
+and says, per campaign, whether they failed the same way (fix the cause, rerun the campaign) or in
+different ways (redo those runs).
+
 ## What you need
 
 - **Windows 10 or 11.** The app starts Docker Desktop itself from its standard install folder.

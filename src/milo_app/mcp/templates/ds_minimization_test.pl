@@ -16,6 +16,7 @@ use ForceFieldDiscoveryScript;
 my $MILO_BUNDLE_ID = '{{BUNDLE_ID}}';
 my $MILO_DROP_DIR = '{{DROP_DIR}}';
 my $MILO_CAMPAIGN = {{CAMPAIGN}};  # the campaign this run belongs to, or undef
+my $MILO_REDO_OF = {{REDO_OF}};  # the failed run this one redoes, or undef
 my %MILO_MOLECULES = {{MOLECULES}};  # from MILO's molecule memory, exactly: $bundle->molecule_file($name, \%MILO_MOLECULES)
 
 {{BUNDLE_WRITER}}
@@ -35,7 +36,7 @@ my $work_dir = DiscoveryScript::GetTemporaryFolder();
 my $bundle = MiloBundle->new(
     bundle_id => $MILO_BUNDLE_ID, product => "Discovery Studio", module => "CHARMm", task => "Minimization",
     drop_dir => $MILO_DROP_DIR, work_dir => $work_dir, title => "Ethanol minimization (test)",
-    campaign => $MILO_CAMPAIGN,
+    campaign => $MILO_CAMPAIGN, redo_of => $MILO_REDO_OF,
 );
 my $status = "failed";
 eval {

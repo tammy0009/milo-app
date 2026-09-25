@@ -16,7 +16,7 @@ import json
 from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QColorDialog, QStyle, QStyleOptionViewItem, QTreeWidget, QTreeWidgetItem
 
 from milo_app.graph import campaign_of
@@ -87,11 +87,22 @@ def run_item(sim: dict[str, Any]) -> QTreeWidgetItem:
     """A run: its title and when it landed, with a check box."""
     bundle_id = sim["bundle_id"]
     title = str(sim.get("title") or bundle_id)
-    item = QTreeWidgetItem([f"{title}\n{when(landed(sim))}"])
+    second = when(landed(sim)) + (" · failed, redone" if sim.get("redone") else " · failed" if sim.get("failed") else "")
+    item = QTreeWidgetItem([f"{title}\n{second}"])
     item.setData(0, SIM_ROLE, bundle_id)
     item.setFlags(CHECKABLE)
-    item.setToolTip(0, f"{title}\n{bundle_id}")
+    tip = [title, bundle_id]
+    if sim.get("failed"):
+        tip.insert(1, "Failed, then redone by a later run" if sim.get("redone")
+                   else "FAILED: " + (sim.get("error") or f"status {sim.get('status')!r}"))
+        item.setForeground(0, QBrush(QColor(theme.COLORS["redone" if sim.get("redone") else "fail"])))
+    item.setToolTip(0, "\n".join(tip))
     return item
+
+
+def still_failed(sim: dict[str, Any]) -> bool:
+    """Failed, and not redone by a later run."""
+    return bool(sim.get("failed")) and not sim.get("redone")
 
 
 class CampaignList(QObject):
@@ -132,6 +143,10 @@ class CampaignList(QObject):
             head.setData(0, CAMPAIGN_ROLE, campaign or "")
             head.setFlags(CHECKABLE)
             count = f"{len(runs)} run{'s' if len(runs) != 1 else ''}"
+            broken = sum(still_failed(s) for s in runs)
+            if broken:
+                count += f", {broken} failed"
+                head.setForeground(0, QBrush(QColor(theme.COLORS["fail"])))
             if campaign:
                 head.setIcon(0, dot_icon(color_of(campaign)))
                 head.setToolTip(0, f"{campaign}\n{count}\nClick the dot to change its color")

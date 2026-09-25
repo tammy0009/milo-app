@@ -161,6 +161,13 @@ def check_script(script: str, timeout_s: int = 180, product: str = "materials_st
         if recorded != campaign:
             problems.append("the bundle's campaign is %r but the user's answer was %r: pass campaign=MILO_CAMPAIGN to "
                             "the writer, with MILO_CAMPAIGN set to that answer" % (recorded, campaign or "none"))
+        if delivered:
+            where = Path(delivered[0]).resolve().relative_to(drop.resolve()).parts
+            want = (app_graph.campaign_folder(campaign), bundle.bundle_id) if campaign else (bundle.bundle_id,)
+            if where != want:
+                problems.append("delivered to %s in the drop folder, not %s: a run in a campaign goes in its "
+                                "campaign's folder (the bundle writer does this from campaign=...)"
+                                % ("/".join(where), "/".join(want)))
         inputs = {item.name for item in bundle.items_in("INPUT")}
         for name in molecules:
             if not any(n.startswith("molecule.") and n.endswith(".checksum") and n[9:-9].lower() == name.lower()

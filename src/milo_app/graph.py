@@ -20,6 +20,7 @@ import json
 import math
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from neo4j import Driver, GraphDatabase
@@ -39,13 +40,111 @@ SCHEMA = (
 ITEM_LABEL = {"INPUT": ("Input", "HAS_INPUT"), "OUTPUT": ("Output", "HAS_OUTPUT")}
 # Properties the app sets itself; a bundle.json field with the same name is kept as manifest_<name>.
 OWN = ("bundle_id", "title", "source_path", "fingerprint", "ingested_at", "problems",
-       "input_count", "output_count", "file_count")
+       "input_count", "output_count", "file_count",
+       "campaign_folder",  # the campaign folder in the drop folder it was found in, if any
+       "failed", "error")  # the run did not succeed (mark_failures), and its error's first words
 
 
 def campaign_of(fields: dict[str, Any]) -> str | None:
     """The campaign a run belongs to (bundle.json "campaign", contract 0.2), or None when it is not in one."""
     value = fields.get("campaign")
     return value.strip() or None if isinstance(value, str) else None
+
+
+def campaign_folder(name: str) -> str:
+    """The folder a campaign's runs go in, inside the drop folder: its name with the characters Windows
+    does not allow in a folder name turned into "-". The bundle writers do exactly the same."""
+    folder = "".join("-" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in name).strip().rstrip(". ")
+    return folder or "campaign"
+
+
+def folder_campaign(drop_dir: Path, root: Path, bundle_id: str) -> str | None:
+    """The campaign folder a bundle sits in: the folder directly inside the drop folder that holds it
+    (drop/<campaign>/<bundle_id>/). None for a bundle straight in the drop folder, or one wrapped in a
+    folder of its own name (a copy from the VM that nested it: drop/<id>/<id>/)."""
+    try:
+        parts = Path(root).resolve().relative_to(Path(drop_dir).resolve()).parts
+    except ValueError:
+        return None
+    if len(parts) < 2 or parts[0] == bundle_id:
+        return None
+    return parts[0]
+
+
+def apply_campaign_folder(bundle: Bundle, folder: str | None) -> None:
+    """A bundle found in a campaign folder belongs to that campaign. Its bundle.json keeps the final
+    word: a run whose bundle.json names no campaign takes the folder's name; one whose bundle.json names
+    a different campaign keeps its own, and the mismatch is noted on the run."""
+    bundle.campaign_folder = folder
+    if folder is None:
+        return
+    own = campaign_of(bundle.manifest)
+    if own is None:
+        bundle.manifest["campaign"] = folder
+    elif campaign_folder(own) != folder:
+        bundle.problems.append(f"found in the campaign folder '{folder}' but its bundle.json says campaign "
+                               f"'{own}' (kept)")
+
+
+def failure(status: Any, error: Any) -> tuple[bool, str | None]:
+    """(did the run fail, its error in a few words). A run failed when it did not end "succeeded" or
+    recorded an error."""
+    text = None
+    if error not in (None, ""):
+        text = " ".join(str(error).split())
+        text = text if len(text) <= 400 else text[:399] + "…"
+    return (status != "succeeded" or text is not None), text
+
+
+def mark_failures(driver: Driver) -> None:
+    """Set failed / error on every run from its status and its "error" output (for runs taken in before
+    these were kept)."""
+    rows, _, _ = driver.execute_query(
+        "MATCH (s:Simulation) OPTIONAL MATCH (s)-[:HAS_OUTPUT]->(e:Output {name: 'error'}) "
+        "RETURN s.bundle_id AS id, s.status AS status, e.value_json AS error"
+    )
+    marks = []
+    for r in rows:
+        error = json.loads(r["error"]) if r["error"] else None
+        failed, text = failure(r["status"], error)
+        marks.append({"id": r["id"], "failed": failed, "error": text})
+    driver.execute_query("UNWIND $marks AS m MATCH (s:Simulation {bundle_id: m.id}) "
+                         "SET s.failed = m.failed, s.error = m.error", marks=marks)
+
+
+def with_redos(sims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark each failed run that a later run redid successfully (bundle.json "redo_of"): "redone" True."""
+    fixed = {s.get("redo_of") for s in sims if s.get("redo_of") and not s.get("failed")}
+    return [s | {"redone": bool(s.get("failed")) and s["bundle_id"] in fixed} for s in sims]
+
+
+def run_issues(driver: Driver) -> list[dict[str, Any]]:
+    """Every run that failed, newest first: its error and traceback, its campaign, the settings it was
+    asked for (to run it again), and the run that redid it, if any (bundle.json "redo_of")."""
+    rows, _, _ = driver.execute_query(
+        """
+        MATCH (s:Simulation) WHERE s.failed
+        OPTIONAL MATCH (s)-[:HAS_OUTPUT]->(t:Output {name: 'traceback'})
+        RETURN properties(s) AS s, t.value_json AS traceback,
+               COLLECT { MATCH (s)-[:HAS_INPUT]->(n) WHERE n.name STARTS WITH 'requested.'
+                         RETURN [n.name, n.value_json, n.units] } AS requested,
+               COLLECT { MATCH (r:Simulation) WHERE r.redo_of = s.bundle_id
+                         RETURN [r.bundle_id, r.title, r.failed] } AS redos
+        ORDER BY coalesce(s.finish, s.start) DESC
+        """
+    )
+    issues = []
+    for r in rows:
+        s = r["s"]
+        issues.append({
+            "bundle_id": s["bundle_id"], "title": s.get("title"), "campaign": campaign_of(s),
+            "status": s.get("status"), "error": s.get("error"), "finish": s.get("finish"),
+            "traceback": json.loads(r["traceback"]) if r["traceback"] else None,
+            "requested": {name: {"value": json.loads(v), "units": u} for name, v, u in r["requested"]},
+            "redone_by": [{"bundle_id": b, "title": t, "failed": bool(f)} for b, t, f in r["redos"]],
+            "source_path": s.get("source_path"),
+        })
+    return issues
 
 
 def connect() -> Driver:
@@ -65,6 +164,7 @@ def is_ready(driver: Driver) -> bool:
 def init_schema(driver: Driver) -> None:
     for statement in SCHEMA:
         driver.execute_query(statement)
+    mark_failures(driver)
 
 
 def storable(value: Any) -> Any:
@@ -101,9 +201,14 @@ def ingest(driver: Driver, bundle: Bundle, fingerprint: str) -> None:
         name = f"manifest_{key}" if key in OWN else key
         kept = storable(value)
         props[name] = kept if kept is not None else _json(value)
+    outputs = {item.name: item.value for item in bundle.items_in("OUTPUT")}
+    failed, error = failure(bundle.manifest.get("status"), outputs.get("error"))
     props.update(
         bundle_id=bundle.bundle_id,
         title=title_of(bundle),
+        campaign_folder=bundle.campaign_folder,
+        failed=failed,
+        error=error,
         source_path=str(bundle.root),
         fingerprint=fingerprint,
         ingested_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -157,7 +262,9 @@ def get_simulation(driver: Driver, bundle_id: str) -> dict[str, Any] | None:
                COLLECT { MATCH (t:Test)-[:TESTED]->(s) RETURN properties(t) } AS tests,
                COLLECT { MATCH (s)-[:HAS_INPUT]->(n)  RETURN properties(n) AS p ORDER BY n.order } AS inputs,
                COLLECT { MATCH (s)-[:HAS_OUTPUT]->(n) RETURN properties(n) AS p ORDER BY n.order } AS outputs,
-               COLLECT { MATCH (s)-[:HAS_FILE]->(f)   RETURN properties(f) AS p ORDER BY f.relpath } AS files
+               COLLECT { MATCH (s)-[:HAS_FILE]->(f)   RETURN properties(f) AS p ORDER BY f.relpath } AS files,
+               COLLECT { MATCH (r:Simulation) WHERE r.redo_of = s.bundle_id AND NOT coalesce(r.failed, false)
+                         RETURN coalesce(r.title, r.bundle_id) } AS redone_by
         """,
         id=bundle_id,
     )
@@ -165,7 +272,7 @@ def get_simulation(driver: Driver, bundle_id: str) -> dict[str, Any] | None:
         return None
     r = rows[0]
     return {"simulation": r["s"], "inputs": r["inputs"], "outputs": r["outputs"], "files": r["files"],
-            "test": r["tests"][0] if r["tests"] else None}
+            "test": r["tests"][0] if r["tests"] else None, "redone_by": r["redone_by"]}
 
 
 # ---------------------------------------------------------------------------- descriptors

@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from milo_app import predict
-from milo_app.graph import campaign_of
+from milo_app.graph import campaign_of, failure, with_redos
 from milo_app.ui.campaigns import CampaignList
 from milo_app.ui import latex, prefs, theme
 from milo_app.ui.format import pretty_name, prior_text, sig, units_text
@@ -42,8 +42,9 @@ C = theme.CHART
 
 def as_sim(row: dict[str, Any]) -> dict[str, Any]:
     """A run of graph.descriptor_table() in the shape the campaign dropdowns read."""
-    field = {k: row["values"].get(f"bundle:{k}", (None,))[0] for k in ("campaign", "finish", "start")}
-    return {"bundle_id": row["id"], "title": row.get("title")} | field
+    field = {k: row["values"].get(f"bundle:{k}", (None,))[0] for k in ("campaign", "finish", "start", "status", "redo_of")}
+    failed, error = failure(field["status"], row["values"].get("output:error", (None,))[0])
+    return {"bundle_id": row["id"], "title": row.get("title"), "failed": failed, "error": error} | field
 
 
 def name(key: str) -> str:
@@ -291,7 +292,7 @@ class FormulaView(QWidget):
     def set_data(self, table: list[dict[str, Any]], relationships: list[dict[str, Any]], titles: dict[str, str]) -> None:
         """Called whenever the graph changes; keeps which runs are on and what is checked."""
         self.all_table, self.all_relationships, self.titles = table, relationships, titles
-        self.campaigns.fill([as_sim(row) for row in table])
+        self.campaigns.fill(with_redos([as_sim(row) for row in table]))
         self._fit_runs_tree()
         self._apply_scope()
 

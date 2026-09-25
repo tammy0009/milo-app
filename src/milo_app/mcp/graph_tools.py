@@ -8,6 +8,7 @@ own recalculation never touches it.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -16,7 +17,7 @@ from milo_app import graph as app_graph
 
 # Simulation properties the app sets itself (not part of the bundle).
 APP_FIELDS = {"source_path", "fingerprint", "ingested_at", "input_count", "output_count", "file_count",
-              "manifest_bundle_id"}
+              "manifest_bundle_id", "failed", "error", "campaign_folder"}
 
 
 def _driver():
@@ -62,6 +63,8 @@ def graph_data(fields: list[str] | None = None) -> dict[str, Any]:
         sims.append({
             "bundle_id": s["bundle_id"],
             "bundle": {k: v for k, v in s.items() if k not in APP_FIELDS and k != "bundle_id"},
+            "failed": bool(s.get("failed")),
+            **({"error": s.get("error")} if s.get("error") else {}),
             "inputs": {n: {"value": _value(v), "units": u} for n, v, u in r["inputs"] if keep(n)},
             "outputs": {n: {"value": _value(v), "units": u} for n, v, u in r["outputs"] if keep(n)},
         })
@@ -77,8 +80,8 @@ def campaigns() -> dict[str, Any]:
         rows, _, _ = driver.execute_query(
             """
             MATCH (s:Simulation)
-            RETURN s.bundle_id AS id, s.title AS title, s.campaign AS campaign,
-                   coalesce(s.finish, s.start, s.ingested_at) AS landed,
+            RETURN s.bundle_id AS id, s.title AS title, s.campaign AS campaign, s.failed AS failed,
+                   s.campaign_folder AS folder, coalesce(s.finish, s.start, s.ingested_at) AS landed,
                    COLLECT { MATCH (s)-[:HAS_INPUT]->(n) WHERE n.name STARTS WITH 'requested.'
                              RETURN [n.name, n.value_json] } AS knobs
             """
@@ -90,8 +93,10 @@ def campaigns() -> dict[str, Any]:
         if name is None:
             outside += 1
             continue
-        c = found.setdefault(name, {"campaign": name, "runs": [], "first": r["landed"], "last": r["landed"], "_knobs": {}})
-        c["runs"].append({"bundle_id": r["id"], "title": r["title"], "landed": r["landed"]})
+        c = found.setdefault(name, {"campaign": name, "folder": app_graph.campaign_folder(name), "runs": [],
+                                    "failed": 0, "first": r["landed"], "last": r["landed"], "_knobs": {}})
+        c["runs"].append({"bundle_id": r["id"], "title": r["title"], "landed": r["landed"], "failed": bool(r["failed"])})
+        c["failed"] += bool(r["failed"])
         c["first"], c["last"] = min(c["first"], r["landed"]), max(c["last"], r["landed"])
         for knob, value in r["knobs"]:
             c["_knobs"].setdefault(knob, set()).add(value)
@@ -101,6 +106,51 @@ def campaigns() -> dict[str, Any]:
         c["runs"].sort(key=lambda run: run["landed"], reverse=True)
         listed.append(c)
     return {"campaigns": listed, "runs_not_in_a_campaign": outside}
+
+
+def _error_kind(error: str | None) -> str:
+    """An error with its numbers blanked, so the same failure in different runs groups together."""
+    return re.sub(r"[-+]?\d[\d.,eE+-]*", "#", error or "(no error recorded)")[:160]
+
+
+def run_errors(campaign: str | None = None, include_traceback: bool = True) -> dict[str, Any]:
+    """Every failed run, and for each campaign how many failed and whether they failed the same way."""
+    with _driver() as driver:
+        issues = app_graph.run_issues(driver)
+        totals, _, _ = driver.execute_query("MATCH (s:Simulation) RETURN s.campaign AS campaign, count(*) AS runs")
+    runs_in = {app_graph.campaign_of({"campaign": r["campaign"]}): r["runs"] for r in totals}
+    if campaign:
+        wanted = campaign.strip().lower()
+        issues = [i for i in issues if (i["campaign"] or "none").lower() == wanted]
+    for issue in issues:
+        if not include_traceback:
+            issue.pop("traceback", None)
+        elif issue.get("traceback"):
+            issue["traceback"] = "\n".join(str(issue["traceback"]).splitlines()[-25:])
+        issue["still_open"] = not any(not r["failed"] for r in issue["redone_by"])
+    campaigns = []
+    for name in sorted({i["campaign"] for i in issues}, key=lambda c: (c is None, c or "")):
+        failed = [i for i in issues if i["campaign"] == name]
+        open_ = [i for i in failed if i["still_open"]]
+        kinds: dict[str, list[str]] = {}
+        for i in failed:
+            kinds.setdefault(_error_kind(i["error"]), []).append(i["title"] or i["bundle_id"])
+        total = runs_in.get(name, len(failed))
+        shared = max(kinds.values(), key=len) if kinds else []
+        if len(shared) >= 2 and len(shared) >= total / 2:
+            verdict = (f"{len(shared)} of {total} runs failed with the same error: most likely the script or the "
+                       "setup, not the settings. Fix the cause, then consider running the whole campaign again.")
+        elif len(failed) == total and total > 1:
+            verdict = f"every run failed ({total}), in different ways: look at the script and the setup first."
+        else:
+            verdict = (f"{len(failed)} of {total} runs failed, in different ways: redo them one by one "
+                       "(milo_generate_script with redo_of), after fixing what each error points to.")
+        campaigns.append({"campaign": name, "runs": total, "failed": len(failed), "still_open": len(open_),
+                          "errors": [{"error": k, "runs": v} for k, v in sorted(kinds.items(), key=lambda kv: -len(kv[1]))],
+                          "verdict": verdict})
+    return {"failed_runs": issues, "campaigns": campaigns,
+            "summary": (f"{sum(i['still_open'] for i in issues)} failed run(s) not redone yet, "
+                        f"{len(issues)} failed in all") if issues else "no failed runs"}
 
 
 def _named_values(values: dict[str, Any], what: str) -> dict[str, dict[str, Any]]:

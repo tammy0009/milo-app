@@ -53,6 +53,7 @@ class Bundle:
     items: list[Item]
     files: list[BundleFile]
     problems: list[str]
+    campaign_folder: str | None = None  # the campaign folder it was found in (graph.folder_campaign)
 
     def items_in(self, sector: str) -> list[Item]:
         return [item for item in self.items if item.sector == sector]

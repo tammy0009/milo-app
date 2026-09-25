@@ -21,6 +21,7 @@ use ForceFieldDiscoveryScript;
 my $MILO_BUNDLE_ID = '{{BUNDLE_ID}}';
 my $MILO_DROP_DIR = '{{DROP_DIR}}';
 my $MILO_CAMPAIGN = {{CAMPAIGN}};  # the campaign this run belongs to, or undef
+my $MILO_REDO_OF = {{REDO_OF}};  # the failed run this one redoes, or undef
 my %MILO_MOLECULES = {{MOLECULES}};  # from MILO's molecule memory, exactly: $bundle->molecule_file($name, \%MILO_MOLECULES)
 my %P = {{PARAMS}};
 
@@ -43,6 +44,7 @@ my $bundle = MiloBundle->new(
     bundle_id => $MILO_BUNDLE_ID, product => "Discovery Studio", module => $P{protocol_name},
     task => $P{protocol_name}, drop_dir => $MILO_DROP_DIR, work_dir => $work_dir,
     title => length $P{title} ? $P{title} : $P{protocol_name}, campaign => $MILO_CAMPAIGN,
+    redo_of => $MILO_REDO_OF,
 );
 my $status = "failed";
 eval {

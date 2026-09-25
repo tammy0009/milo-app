@@ -173,7 +173,10 @@ class SimNode(Node):
         self.label = metrics.elidedText(short_title(self.title), Qt.TextElideMode.ElideRight, G["sim_label_max"])
         self.label_w = metrics.horizontalAdvance(self.label) + 4
         details = " · ".join(p for p in (str(sim.get("module") or ""), elapsed(sim)) if p)
-        self.setToolTip("\n".join(p for p in (self.title, details, sim["bundle_id"]) if p))
+        self.failed, self.redone = bool(sim.get("failed")), bool(sim.get("redone"))
+        trouble = ("Failed, then redone by a later run" if self.redone else
+                   "FAILED: " + (sim.get("error") or f"status {sim.get('status')!r}") if self.failed else "")
+        self.setToolTip("\n".join(p for p in (self.title, details, trouble, sim["bundle_id"]) if p))
         self.prepareGeometryChange()
         self.update()
 
@@ -189,6 +192,24 @@ class SimNode(Node):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(G["sim_fill"]))
         painter.drawEllipse(QPointF(0, 0), self.r, self.r)
+        if self.failed:
+            # a red ring and a "!" badge; grey and dashed, with no badge, once a later run redid it
+            color = QColor(theme.COLORS["redone" if self.redone else "fail"])
+            pen = QPen(color, G["fail_ring_width"])
+            if self.redone:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(0, 0), self.r + 3, self.r + 3)
+            if not self.redone:
+                b = G["fail_badge"] / 2
+                spot = QPointF(self.r * 0.74, -self.r * 0.74)
+                painter.setPen(QPen(QColor(G["canvas"]), 1.5))
+                painter.setBrush(color)
+                painter.drawEllipse(spot, b, b)
+                painter.setPen(QColor("#ffffff"))
+                painter.setFont(theme.font(G["fail_badge"] - 4, bold=True))
+                painter.drawText(QRectF(spot.x() - b, spot.y() - b, 2 * b, 2 * b), Qt.AlignmentFlag.AlignCenter, "!")
         painter.setFont(self.label_font)
         painter.setPen(QColor(theme.COLORS["ink"]))
         painter.drawText(QRectF(-self.label_w / 2, self.r + 6, self.label_w, G["sim_label_px"] + 6),

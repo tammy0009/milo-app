@@ -1,8 +1,9 @@
-# ===================== MILO bundle writer (contract 0.2) — do not edit =====================
+# ===================== MILO bundle writer (contract 0.3) — do not edit =====================
 # Builds a MILO sim bundle with INPUT and OUTPUT fully separated:
 #   <bundle_id>/INPUT/inputs.json + INPUT/files/   <bundle_id>/OUTPUT/outputs.json + OUTPUT/files/
 #   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed,
-#                             and campaign when the run is part of one)
+#                             campaign when the run is part of one, redo_of when it redoes a failed run)
+# A run in a campaign is delivered to MILO_DROP_DIR/<campaign folder>/<bundle_id>/.
 # The bundle is staged in the job folder, then copied to MILO_DROP_DIR (bundle.json copied last).
 # Standard library only, and only modules Materials Studio's trimmed Python ships (it has no json, socket, zipfile).
 import datetime as _milo_dt
@@ -13,7 +14,7 @@ import sys as _milo_sys
 import time as _milo_time
 import traceback as _milo_traceback
 
-MILO_CONTRACT = "0.2"
+MILO_CONTRACT = "0.3"
 
 
 def _milo_checksum(text):
@@ -23,6 +24,13 @@ def _milo_checksum(text):
         h ^= ord(ch)
         h = (h * 0x01000193) & 0xFFFFFFFF
     return "fnv1a:%08x" % h
+
+
+def _milo_campaign_folder(name):
+    """The campaign's folder in the drop folder: characters Windows refuses in a folder name become "-"
+    (the same rule as the MILO app's)."""
+    folder = "".join("-" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in name).strip().rstrip(". ")
+    return folder or "campaign"
 
 
 def _milo_now():
@@ -97,7 +105,8 @@ def _milo_json_text(value, level=0):
 
 
 class MiloBundle:
-    def __init__(self, bundle_id, product, module, task, drop_dir, work_dir=None, title=None, campaign=None):
+    def __init__(self, bundle_id, product, module, task, drop_dir, work_dir=None, title=None, campaign=None,
+                 redo_of=None):
         self.bundle_id = bundle_id
         self.drop_dir = drop_dir
         self.work_dir = _milo_os.path.abspath(work_dir or _milo_os.getcwd())
@@ -123,6 +132,9 @@ class MiloBundle:
         # Optional: a run that is not part of one carries no campaign field at all.
         if campaign and str(campaign).strip():
             self.manifest["campaign"] = str(campaign).strip()
+        # A run made again because an earlier one failed names that run, so MILO links the two.
+        if redo_of and str(redo_of).strip():
+            self.manifest["redo_of"] = str(redo_of).strip()
         for sector in ("INPUT", "OUTPUT"):
             _milo_os.makedirs(_milo_os.path.join(self.root, sector, "files"), exist_ok=True)
 
@@ -330,7 +342,9 @@ class MiloBundle:
         if not self.drop_dir:
             print("MILO: no drop folder set; bundle stays in the job folder.")
             return
-        dest = _milo_os.path.join(self.drop_dir, self.bundle_id)
+        campaign = self.manifest.get("campaign")
+        folder = _milo_os.path.join(self.drop_dir, _milo_campaign_folder(campaign)) if campaign else self.drop_dir
+        dest = _milo_os.path.join(folder, self.bundle_id)
         try:
             _milo_shutil.copytree(self.root, dest, ignore=_milo_shutil.ignore_patterns("bundle.json"), dirs_exist_ok=True)
             _milo_shutil.copy2(_milo_os.path.join(self.root, "bundle.json"), _milo_os.path.join(dest, "bundle.json"))

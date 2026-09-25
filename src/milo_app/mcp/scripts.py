@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from milo_app import graph as app_graph
 from milo_app.config import get_settings
 from milo_app.mcp import molecules as molecule_memory
 
@@ -88,9 +89,14 @@ BUNDLE_CONTRACT = {
         "<bundle_id>/INPUT/files/": "every input file (structures, settings dumps, the script)",
         "<bundle_id>/OUTPUT/outputs.json": "every output: {name: {value, units, ...}}",
         "<bundle_id>/OUTPUT/files/": "every output file (structures, reports, trajectories, job files)",
-        "<bundle_id>/bundle.json": "bundle_id, product, module, task, status, start, finish, time_elapsed, and "
-        "campaign when the run is part of one (written LAST)",
+        "<bundle_id>/bundle.json": "bundle_id, product, module, task, status, start, finish, time_elapsed, "
+        "campaign when the run is part of one, redo_of when it redoes a failed run (written LAST)",
     },
+    "campaign_folder": "a run in a campaign is delivered to <drop folder>/<campaign folder>/<bundle_id>/, the "
+    "campaign's name with characters Windows refuses in folder names turned into '-'. The MILO app also reads a "
+    "bundle in such a folder as part of that campaign (bundle.json still has the last word).",
+    "redo_of": "optional: the bundle_id of a failed run this run makes again (milo_run_errors lists them); the "
+    "MILO app links the two and shows the failed one as redone.",
     "campaign": "optional: the name of a series of similar runs (the same experiment, different knob settings). "
     "Ask the user before writing a script whether the runs belong to a campaign, a new one they name or an "
     "existing one (milo_list_campaigns), and pass it to the writer; leave it out for a run that is not part of one. "
@@ -314,10 +320,27 @@ def fill_molecules(script: str, names: list[str], language: str, product: str) -
     return script.replace("{{MOLECULES}}", molecules_literal(entries, language))
 
 
+def redo_target(redo_of: str | None) -> str | None:
+    """The failed run a new one redoes: it must be a run in the MILO app's graph that failed."""
+    redo_of = (redo_of or "").strip()
+    if not redo_of:
+        return None
+    with app_graph.connect() as driver:
+        rows, _, _ = driver.execute_query(
+            "MATCH (s:Simulation {bundle_id: $id}) RETURN s.failed AS failed, s.title AS title", id=redo_of)
+    if not rows:
+        raise ValueError(f"redo_of: no run {redo_of} in the MILO app's graph (milo_run_errors lists the failed ones)")
+    if not rows[0]["failed"]:
+        raise ValueError(f"redo_of: run {redo_of} ({rows[0]['title']}) did not fail; a redo is for a failed run")
+    return redo_of
+
+
 def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None,
-                    campaign: str | None = None) -> dict[str, Any]:
-    """campaign: the user's answer, a campaign name or "none" (campaign_choice)."""
+                    campaign: str | None = None, redo_of: str | None = None) -> dict[str, Any]:
+    """campaign: the user's answer, a campaign name or "none" (campaign_choice). redo_of: the bundle_id of
+    the failed run this one makes again, if it is a redo."""
     campaign = campaign_choice(campaign)
+    redo_of = redo_target(redo_of)
     if kind not in SCRIPTS:
         raise ValueError(f"Unknown script '{kind}'. Available: {', '.join(SCRIPTS)}")
     spec = SCRIPTS[kind]
@@ -355,12 +378,14 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         .replace("{{PARAMS}}", params_text)
         .replace("{{TITLE}}", str(title).replace("\n", " "))
         .replace("{{CAMPAIGN}}", perl_literal(campaign) if language == "perl" else repr(campaign))
+        .replace("{{REDO_OF}}", perl_literal(redo_of) if language == "perl" else repr(redo_of))
     )
     script = fill_molecules(script, wanted, language, product)
     out_dir = settings.data_dir / "generated_scripts"
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = out_dir / f"{kind}_{bundle_id}.{'pl' if language == 'perl' else 'py'}"
     saved.write_text(script, encoding="utf-8")
+    landing = drop + (f"\\{app_graph.campaign_folder(campaign)}" if campaign else "") + f"\\{bundle_id}"
 
     return {
         "bundle_id": bundle_id,
@@ -369,6 +394,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         "language": spec["language"],
         "params": merged,
         "campaign": campaign,
+        "redo_of": redo_of,
         "molecules": [molecule_memory.summary(molecule_memory.find(n)) for n in wanted],
         "drop_dir_in_script": drop,
         "saved_copy": str(saved),
@@ -376,8 +402,10 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         "script": script,
         "next_steps": [
             run_step,
-            f"The bundle is written to {drop}\\{bundle_id} on the VM (a copy stays in {stage_note} as milo_bundle_{bundle_id}).",
-            f"Copy that folder into the MILO drop folder on the MILO PC ({settings.drop_dir}), then: uv run milo ingest {settings.drop_dir}",
+            f"The bundle is written to {landing} on the VM (a copy stays in {stage_note} as milo_bundle_{bundle_id}).",
+            f"If the VM cannot write to the MILO drop folder directly, copy that folder to {settings.drop_dir}"
+            + (f"\\{app_graph.campaign_folder(campaign)}" if campaign else "")
+            + " on the MILO PC: the app takes it in within seconds.",
         ],
     }
 

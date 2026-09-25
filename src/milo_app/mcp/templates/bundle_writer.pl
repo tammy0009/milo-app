@@ -1,8 +1,9 @@
-# ===================== MILO bundle writer (contract 0.2, Perl) — do not edit =====================
+# ===================== MILO bundle writer (contract 0.3, Perl) — do not edit =====================
 # Builds a MILO sim bundle with INPUT and OUTPUT fully separated:
 #   <bundle_id>/INPUT/inputs.json + INPUT/files/   <bundle_id>/OUTPUT/outputs.json + OUTPUT/files/
 #   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed,
-#                             and campaign when the run is part of one)
+#                             campaign when the run is part of one, redo_of when it redoes a failed run)
+# A run in a campaign is delivered to MILO_DROP_DIR/<campaign folder>/<bundle_id>/.
 # The bundle is staged in the work folder, then copied to MILO_DROP_DIR (bundle.json copied last).
 # Core Perl modules only (Discovery Studio ships a full Perl), and no JSON module: values are written by hand
 # so numbers stay numbers and names keep the order the script recorded them in.
@@ -20,7 +21,7 @@ use POSIX ();
 use Scalar::Util ();
 use Time::HiRes ();
 
-our $CONTRACT = "0.2";
+our $CONTRACT = "0.3";
 our $LAST_TRACE;  # stack of the most recent die, for record_error
 $SIG{__DIE__} = sub { $LAST_TRACE = Carp::longmess("$_[0]") };
 
@@ -138,6 +139,12 @@ sub new {
     if (defined $args{campaign} && $args{campaign} =~ /\S/) {
         (my $campaign = $args{campaign}) =~ s/^\s+|\s+$//g;
         $self->{manifest}->set(campaign => text($campaign));
+        $self->{campaign} = $campaign;
+    }
+    # A run made again because an earlier one failed names that run, so MILO links the two.
+    if (defined $args{redo_of} && $args{redo_of} =~ /\S/) {
+        (my $redo_of = $args{redo_of}) =~ s/^\s+|\s+$//g;
+        $self->{manifest}->set(redo_of => text($redo_of));
     }
     File::Path::make_path(File::Spec->catdir($self->{root}, $_, "files")) for qw(INPUT OUTPUT);
     return $self;
@@ -367,13 +374,24 @@ sub _dump {
     close $handle;
 }
 
+# The campaign's folder in the drop folder: characters Windows refuses in a folder name become "-"
+# (the same rule as the MILO app's).
+sub campaign_folder {
+    (my $folder = shift) =~ s{[<>:"/\\|?*\x00-\x1f]}{-}g;
+    $folder =~ s/^\s+//;
+    $folder =~ s/[\s.]+$//;
+    return length $folder ? $folder : "campaign";
+}
+
 sub _deliver {
     my ($self) = @_;
     unless ($self->{drop_dir}) {
         print "MILO: no drop folder set; bundle stays in the work folder.\n";
         return;
     }
-    my $dest = File::Spec->catdir($self->{drop_dir}, $self->{bundle_id});
+    my $folder = defined $self->{campaign}
+        ? File::Spec->catdir($self->{drop_dir}, campaign_folder($self->{campaign})) : $self->{drop_dir};
+    my $dest = File::Spec->catdir($folder, $self->{bundle_id});
     my $ok = eval {
         my $root = $self->{root};
         File::Find::find({no_chdir => 1, wanted => sub {

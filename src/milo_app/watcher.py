@@ -2,7 +2,8 @@
 
 Every few seconds: find the bundle folders (bundle.json is written last, so only finished runs
 count), fingerprint each one (file count, total size, newest change), and ingest any that are new
-or changed. A fingerprint has to hold still across two looks before it is ingested, so a bundle
+or changed. A bundle in a folder directly inside the drop folder (drop/<campaign>/<bundle_id>/) belongs
+to that campaign; moving it into or out of one takes it in again with its new campaign. A fingerprint has to hold still across two looks before it is ingested, so a bundle
 still being copied in from the VM is never read half-way.
 """
 from __future__ import annotations
@@ -31,6 +32,7 @@ def fingerprint(folder: Path) -> str:
 
 class Watcher(QObject):
     ingested = Signal(str, str)  # bundle_id, title
+    run_failed = Signal(str, str, str)  # bundle_id, title, error: a run that arrived failed
     failed = Signal(str, str)  # folder, error
     scanned = Signal(int)  # bundles seen in the drop folder
 
@@ -88,6 +90,8 @@ class Watcher(QObject):
             del self._pending[key]
             try:
                 bundle = read_bundle(folder)
+                # drop/<campaign>/<bundle_id>/: the folder names the campaign (bundle.json has the last word)
+                graph.apply_campaign_folder(bundle, graph.folder_campaign(self.drop_dir, folder, bundle.bundle_id))
                 prediction = self._predict_blind(bundle)  # before it joins the data (ghost.md 7.1)
                 graph.ingest(self.driver, bundle, fp)
             except Exception as exc:  # noqa: BLE001
@@ -102,3 +106,8 @@ class Watcher(QObject):
             self._known[key] = fp
             log.info("ingested %s", bundle.bundle_id)
             self.ingested.emit(bundle.bundle_id, graph.title_of(bundle))
+            outputs = {item.name: item.value for item in bundle.items_in("OUTPUT")}
+            failed, error = graph.failure(bundle.manifest.get("status"), outputs.get("error"))
+            if failed:
+                self.run_failed.emit(bundle.bundle_id, graph.title_of(bundle),
+                                     error or f"status {bundle.manifest.get('status')!r}")

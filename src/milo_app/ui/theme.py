@@ -25,6 +25,9 @@ COLORS = {
     "ok": "#1f8a4c",
     "warn": "#b26a00",
     "bad": "#c0392b",
+    "fail": "#d62828",        # a run that failed: its ring and badge on the graph, its name in the lists
+    "fail_soft": "#fdecea",   # behind a failed run's error in its panel
+    "redone": "#9a9a9a",      # a failed run that a later run redid
 }
 
 FONT_FILES = ("alte-haas-grotesk-regular.ttf", "alte-haas-grotesk-bold.ttf")
@@ -82,6 +85,9 @@ GRAPH = {
     "ghost_ink": "#6b6b6b",
     "ghost_opacity": 0.85,
     "dim": 0.12,               # opacity of nodes a search does not match
+    # a run that failed: a red ring round its circle and a "!" badge (grey, with no badge, once redone)
+    "fail_ring_width": 3.0,
+    "fail_badge": 15,          # diameter of the "!" badge
     # campaign rings: a dotted ring in the campaign's color around its runs, turning slowly
     "ring_margin": 58,         # px past the farthest run's centre (its circle and its label)
     "ring_width": 2.4,
@@ -145,6 +151,10 @@ QLabel#SimTitle {{ font-size: {title}px; font-weight: bold; }}
 QLabel#SimId {{ color: {muted}; font-size: {small}px; }}
 QLabel#FieldName {{ color: {muted}; font-size: {small}px; }}
 QLabel#Problems {{ color: {warn}; font-size: {small}px; }}
+QLabel#RunError {{ background: {fail_soft}; color: {fail}; border-radius: {radius}px; padding: 8px 10px;
+                   font-size: {small}px; }}
+QLabel#RunRedone {{ background: {surface}; color: {muted}; border-radius: {radius}px; padding: 8px 10px;
+                    font-size: {small}px; }}
 QLabel#TestSummary {{ background: {surface}; border-radius: {radius}px; padding: 8px 10px; font-size: {small}px; }}
 QLabel#Track {{ background: {surface}; border-radius: {radius}px; padding: 10px 12px; }}
 QLabel#Empty {{ color: {muted}; }}

@@ -31,7 +31,15 @@ mcp = MCPServer(
         "{{MOLECULES}} line (Perl: my %MILO_MOLECULES = {{MOLECULES}};), bundle.molecule_file(name, MILO_MOLECULES) "
         "to load each one, and milo_check_script(..., molecules=[names]) to fill them in; give the user the "
         "script it returns. "
-        "The MILO app's graph holds every finished simulation: read it with milo_graph_data. Predictions "
+        "The MILO app's graph holds every finished simulation: read it with milo_graph_data. "
+        "FAILED RUNS: check milo_run_errors whenever you read the graph or plan runs, and tell the user about any "
+        "failed run straight away (which run, its error in plain words, what it points to). For a campaign, say "
+        "whether the failures look like one shared cause (fix the script, rerun the campaign) or separate ones "
+        "(redo those runs). A redo is a new script with the same settings as the failed run (confirmed with the "
+        "user, as always) and redo_of=<its bundle_id>, in the same campaign. "
+        "Runs in a campaign are delivered to <drop folder>/<campaign folder>/<bundle_id>/; the app also reads a "
+        "run placed in such a folder as part of that campaign. "
+        "Predictions "
         "(ghost nodes: runs not made yet) come from the app's own calculation and from you: reason from the data, "
         "and physics you can justify, and store yours with milo_add_prediction, with an honest confidence."
     ),
@@ -64,14 +72,18 @@ def milo_list_scripts() -> dict[str, Any]:
 
 @mcp.tool()
 def milo_generate_script(
-    kind: str, campaign: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None
+    kind: str, campaign: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None,
+    redo_of: str = "",
 ) -> dict[str, Any]:
     """Generate a paste-ready BIOVIA script that writes a complete MILO bundle.
 
     campaign: ASK THE USER FIRST whether these runs are part of a campaign (a named series of similar runs:
     the same experiment with different knob settings). Offer the existing ones (milo_list_campaigns) or a new
     name they choose. Pass that name, or "none" if the runs are not part of a campaign; a blank is refused.
-    Every script in one series must use exactly the same name.
+    Every script in one series must use exactly the same name. The run is delivered into the campaign's folder
+    in the drop folder.
+    redo_of: when this run makes a failed run again, that run's bundle_id (from milo_run_errors); MILO links the
+    two and shows the failed one as redone.
 
     kind: one of milo_list_scripts (e.g. 'ms_pla_pcl_amorphous_cell', 'ms_forcite_geomopt', 'ds_minimization',
     'ds_protocol').
@@ -81,7 +93,7 @@ def milo_generate_script(
     drop_dir_vm: the drop folder path as seen from inside the BIOVIA VM (defaults to MILO_DROP_DIR_VM).
     Give the user the full 'script' text: Python for Materials Studio, Perl (.pl) for Discovery Studio.
     """
-    return scripts.generate_script(kind, params, drop_dir_vm, campaign)
+    return scripts.generate_script(kind, params, drop_dir_vm, campaign, redo_of)
 
 
 @mcp.tool()
@@ -177,9 +189,19 @@ def milo_get_molecule(name: str, include_structure: bool = False) -> dict[str, A
 
 
 @mcp.tool()
+def milo_run_errors(campaign: str = "", include_traceback: bool = True) -> dict[str, Any]:
+    """Every run that failed (status not "succeeded", or an "error" recorded), newest first: its error and the
+    end of its traceback, its campaign, the settings it asked for (to redo it), and any run that redid it.
+    Per campaign: how many runs failed, the errors grouped (numbers blanked, so one cause shows as one group),
+    and a verdict: one shared cause (fix it, rerun the campaign) or separate ones (redo those runs).
+    campaign: only this campaign ("none" for runs in no campaign). Tell the user about failures right away."""
+    return graph_tools.run_errors(campaign or None, include_traceback)
+
+
+@mcp.tool()
 def milo_list_campaigns() -> dict[str, Any]:
-    """The campaigns already in the MILO app's graph, newest first: each one's runs, when it started and last
-    ran, and which requested.* settings (knobs) vary across it. Offer these when asking the user which campaign
+    """The campaigns already in the MILO app's graph, newest first: each one's runs (and which failed), its
+    folder in the drop folder, when it started and last ran, and which requested.* settings (knobs) vary. Offer these when asking the user which campaign
     new runs belong to."""
     return graph_tools.campaigns()
 

@@ -139,6 +139,8 @@ class Detail(QWidget):
         self.bundle_id = QLabel(objectName="SimId")
         self.bundle_id.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.problems = QLabel(objectName="Problems", wordWrap=True)
+        self.run_error = QLabel(objectName="RunError", wordWrap=True)  # a failed run: why, first
+        self.run_error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.test = QLabel(objectName="TestSummary", wordWrap=True)
 
         self.fields: dict[str, QLabel] = {}
@@ -180,6 +182,7 @@ class Detail(QWidget):
         box.addLayout(head)
         box.addWidget(self.bundle_id)
         box.addWidget(open_folder, 0, Qt.AlignmentFlag.AlignLeft)
+        box.addWidget(self.run_error)
         box.addWidget(self.problems)
         box.addWidget(self.test)
         box.addSpacing(6)
@@ -202,6 +205,7 @@ class Detail(QWidget):
         self.folder = Path(sim["source_path"]) if sim.get("source_path") else None
         self.title.setText(sim.get("title", ""))
         self.bundle_id.setText(sim.get("bundle_id", ""))
+        self._show_error(record)
         problems = sim.get("problems") or []
         self.problems.setText("\n".join("⚠ " + p for p in problems))
         self.problems.setVisible(bool(problems))
@@ -232,6 +236,26 @@ class Detail(QWidget):
         self._show_test(record.get("test"))
         self.empty.hide()
         self.body.show()
+
+    def _show_error(self, record: dict[str, Any]) -> None:
+        """A failed run's panel starts with why: its error and the end of its traceback."""
+        sim = record["simulation"]
+        if not sim.get("failed"):
+            self.run_error.hide()
+            return
+        outputs = {row.get("name"): row for row in record["outputs"]}
+        trace = shown_value(outputs["traceback"])[1] if "traceback" in outputs else ""
+        tail = "\n".join(trace.strip().splitlines()[-8:])
+        redone = record.get("redone_by") or []
+        lines = [("This run failed, and was redone by " + ", ".join(redone) + "." if redone else "This run failed."),
+                 sim.get("error") or f"Status: {sim.get('status')}"]
+        if tail and tail != sim.get("error"):
+            lines += ["", tail]
+        self.run_error.setObjectName("RunRedone" if redone else "RunError")
+        self.run_error.style().unpolish(self.run_error)
+        self.run_error.style().polish(self.run_error)
+        self.run_error.setText("\n".join(lines))
+        self.run_error.show()
 
     def _show_test(self, test: dict | None) -> None:
         """How the blind prediction of this run went (blind.py): a summary, and every value."""
@@ -407,6 +431,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(1)
         self.watcher = Watcher(self.driver, self.settings.drop_dir, self.settings.scan_seconds)
         self.watcher.ingested.connect(self.on_ingested)
+        self.watcher.run_failed.connect(self.on_run_failed)
         self.watcher.failed.connect(lambda folder, err: self.statusBar().showMessage(f"Could not read {folder}: {err}"))
         self.watcher.scanned.connect(self._on_scanned)
         self.watcher.start()
@@ -430,7 +455,7 @@ class MainWindow(QMainWindow):
         """The data or its calculation changed: refresh everything that shows it. (Ticking a
         descriptor only needs redraw().)"""
         self.descriptors.set_groups(graph.descriptor_groups(self.driver))
-        self.descriptors.set_sims(graph.list_simulations(self.driver))
+        self.descriptors.set_sims(graph.with_redos(graph.list_simulations(self.driver)))
         self.redraw()
         self.formulas.set_data(graph.descriptor_table(self.driver), graph.list_relationships(self.driver), self._titles)
         self.formulas.set_track(graph.list_tests(self.driver))
@@ -455,7 +480,7 @@ class MainWindow(QMainWindow):
 
     def redraw(self) -> None:
         """Build every node and link, then show only the kinds switched on in the type bar."""
-        sims = graph.list_simulations(self.driver)
+        sims = graph.with_redos(graph.list_simulations(self.driver))
         self._titles = {s["bundle_id"]: str(s.get("title") or s["bundle_id"]) for s in sims}
         relationships = graph.list_relationships(self.driver)
         predictions = graph.list_predictions(self.driver)
@@ -515,6 +540,10 @@ class MainWindow(QMainWindow):
             hints.append("No descriptors checked: check fields in the list on the left")
         if "relationship" in shown and len(self.descriptors.active) == 1:
             hints.append("Check a second descriptor to see the relationships between them")
+        broken = [s for s in sims if s["bundle_id"] in shown_sims and s.get("failed") and not s.get("redone")]
+        if broken and "sim" in shown:
+            hints.insert(0, f"{len(broken)} run{'s' if len(broken) != 1 else ''} failed (red "
+                            "ring): double-click one to see why")
         if sims and not shown_sims:
             hints.append("Every run is unchecked in the Sim Feed")
         if not shown:
@@ -596,6 +625,10 @@ class MainWindow(QMainWindow):
         self.current = None
         self.drawer_node = None
         self.drawer.close_drawer()
+
+    def on_run_failed(self, bundle_id: str, title: str, error: str) -> None:
+        """Say so straight away: a run that arrives failed."""
+        self.statusBar().showMessage(f"{title} failed: {error}", 20000)
 
     def on_ingested(self, bundle_id: str, title: str) -> None:
         self.reload()
