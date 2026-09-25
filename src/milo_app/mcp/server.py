@@ -16,6 +16,9 @@ mcp = MCPServer(
         "ProtocolDiscoveryScript). Search the BIOVIA docs before writing custom script code. Every script must use "
         "the MILO bundle writer for its language (see milo_bundle_contract), and pass milo_check_script before "
         "it goes to the user. "
+        "Before writing a script, ask the user whether these runs are part of a campaign (a named series of similar "
+        "runs: the same experiment with different knob settings), either a new one they name or an existing one "
+        "from milo_list_campaigns, and pass the answer as campaign (\"\" when they are not). "
         "The MILO app's graph holds every finished simulation: read it with milo_graph_data. Predictions "
         "(ghost nodes: runs not made yet) come from the app's own calculation and from you: reason from the data, "
         "and physics you can justify, and store yours with milo_add_prediction, with an honest confidence."
@@ -49,9 +52,14 @@ def milo_list_scripts() -> dict[str, Any]:
 
 @mcp.tool()
 def milo_generate_script(
-    kind: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None
+    kind: str, campaign: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None
 ) -> dict[str, Any]:
     """Generate a paste-ready BIOVIA script that writes a complete MILO bundle.
+
+    campaign: ASK THE USER FIRST whether these runs are part of a campaign (a named series of similar runs:
+    the same experiment with different knob settings). Offer the existing ones (milo_list_campaigns) or a new
+    name they choose. Pass that name, or "" if the runs are not part of a campaign. Every script in one
+    series must use exactly the same name.
 
     kind: one of milo_list_scripts (e.g. 'ms_pla_pcl_amorphous_cell', 'ms_forcite_geomopt', 'ds_minimization',
     'ds_protocol').
@@ -60,7 +68,7 @@ def milo_generate_script(
     drop_dir_vm: the drop folder path as seen from inside the BIOVIA VM (defaults to MILO_DROP_DIR_VM).
     Give the user the full 'script' text: Python for Materials Studio, Perl (.pl) for Discovery Studio.
     """
-    return scripts.generate_script(kind, params, drop_dir_vm)
+    return scripts.generate_script(kind, params, drop_dir_vm, campaign)
 
 
 @mcp.tool()
@@ -109,6 +117,14 @@ def milo_graph_data(fields: list[str] | None = None) -> dict[str, Any]:
     fields: only inputs/outputs whose name contains one of these (case-insensitive), e.g. ["density", "temperature"].
     Leave it out to get everything. Long values (settings dumps, arrays) are shortened."""
     return graph_tools.graph_data(fields)
+
+
+@mcp.tool()
+def milo_list_campaigns() -> dict[str, Any]:
+    """The campaigns already in the MILO app's graph, newest first: each one's runs, when it started and last
+    ran, and which requested.* settings (knobs) vary across it. Offer these when asking the user which campaign
+    new runs belong to."""
+    return graph_tools.campaigns()
 
 
 @mcp.tool()

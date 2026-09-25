@@ -326,6 +326,14 @@ def formula(table: list[dict[str, Any]], target: str, predictors: list[str]) -> 
 # ---------------------------------------------------------------------------- relationships (ghost.md 5.3)
 
 
+def relationships_in(table: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The relationships over just these runs (the Ghosts tab looking inside one campaign): the same
+    calculation as the stored ones, which are over every run. Nothing is stored."""
+    columns = _columns(table)
+    knobs = _knobs(columns, len(table))
+    return _relationships(_merge_duplicates(columns, knobs), columns, knobs, [s["id"] for s in table])
+
+
 def _relationships(groups, columns, knobs, sims) -> list[dict[str, Any]]:
     numeric = [rep for rep in groups if columns[rep]["numeric"] and np.ptp(columns[rep]["values"]) > 0]
     found = []

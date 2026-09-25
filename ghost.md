@@ -149,6 +149,11 @@ the explaining descriptors into a guess with its range and confidence (5.1).
 Between two outputs the formula describes how they move together across the runs so far; it is
 cause and effect only when the explaining descriptor is a knob (5.3).
 
+**Campaign** (the picker at the top of the tab) narrows everything on the tab to one campaign's runs,
+or to the runs in no campaign: the descriptors listed, the formula and its chart, the relationship
+confidences (5.3 worked out again over just those runs) and the track record. The stored models,
+relationships and ghosts stay over every run; this only isolates a campaign to look at it on its own.
+
 ---
 
 ## 5. Confidence

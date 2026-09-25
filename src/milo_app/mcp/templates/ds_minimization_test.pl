@@ -15,6 +15,7 @@ use ForceFieldDiscoveryScript;
 
 my $MILO_BUNDLE_ID = '{{BUNDLE_ID}}';
 my $MILO_DROP_DIR = '{{DROP_DIR}}';
+my $MILO_CAMPAIGN = {{CAMPAIGN}};  # the campaign this run belongs to, or undef
 
 {{BUNDLE_WRITER}}
 
@@ -33,6 +34,7 @@ my $work_dir = DiscoveryScript::GetTemporaryFolder();
 my $bundle = MiloBundle->new(
     bundle_id => $MILO_BUNDLE_ID, product => "Discovery Studio", module => "CHARMm", task => "Minimization",
     drop_dir => $MILO_DROP_DIR, work_dir => $work_dir, title => "Ethanol minimization (test)",
+    campaign => $MILO_CAMPAIGN,
 );
 my $status = "failed";
 eval {

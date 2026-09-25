@@ -42,6 +42,12 @@ OWN = ("bundle_id", "title", "source_path", "fingerprint", "ingested_at", "probl
        "input_count", "output_count", "file_count")
 
 
+def campaign_of(fields: dict[str, Any]) -> str | None:
+    """The campaign a run belongs to (bundle.json "campaign", contract 0.2), or None when it is not in one."""
+    value = fields.get("campaign")
+    return value.strip() or None if isinstance(value, str) else None
+
+
 def connect() -> Driver:
     s = get_settings()
     return GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password),
@@ -88,6 +94,10 @@ def title_of(bundle: Bundle) -> str:
 def ingest(driver: Driver, bundle: Bundle, fingerprint: str) -> None:
     props: dict[str, Any] = {}
     for key, value in bundle.manifest.items():
+        if key == "campaign" and campaign_of(bundle.manifest) is None:
+            continue  # no campaign (absent, null or blank): the run is not part of one
+        if key == "campaign":
+            value = campaign_of(bundle.manifest)
         name = f"manifest_{key}" if key in OWN else key
         kept = storable(value)
         props[name] = kept if kept is not None else _json(value)

@@ -10,6 +10,7 @@ from PyMaterialsScript import *
 
 MILO_BUNDLE_ID = "{{BUNDLE_ID}}"
 MILO_DROP_DIR = r"{{DROP_DIR}}"
+MILO_CAMPAIGN = {{CAMPAIGN}}  # the campaign this run belongs to, or None
 
 {{BUNDLE_WRITER}}
 
@@ -36,7 +37,7 @@ FORCITE_SETTINGS = [
 
 
 bundle = MiloBundle(MILO_BUNDLE_ID, "Materials Studio", "Forcite", "Geometry Optimization", MILO_DROP_DIR,
-                    title="Water geometry optimization (test)")
+                    title="Water geometry optimization (test)", campaign=MILO_CAMPAIGN)
 status = "failed"
 try:
     # ---------------- INPUT ----------------

@@ -71,6 +71,38 @@ def graph_data(fields: list[str] | None = None) -> dict[str, Any]:
     return {"simulations": sims, "predictions": predictions}
 
 
+def campaigns() -> dict[str, Any]:
+    """Every campaign in the graph, newest first, and how many runs are not in one."""
+    with _driver() as driver:
+        rows, _, _ = driver.execute_query(
+            """
+            MATCH (s:Simulation)
+            RETURN s.bundle_id AS id, s.title AS title, s.campaign AS campaign,
+                   coalesce(s.finish, s.start, s.ingested_at) AS landed,
+                   COLLECT { MATCH (s)-[:HAS_INPUT]->(n) WHERE n.name STARTS WITH 'requested.'
+                             RETURN [n.name, n.value_json] } AS knobs
+            """
+        )
+    found: dict[str, dict[str, Any]] = {}
+    outside = 0
+    for r in rows:
+        name = app_graph.campaign_of({"campaign": r["campaign"]})
+        if name is None:
+            outside += 1
+            continue
+        c = found.setdefault(name, {"campaign": name, "runs": [], "first": r["landed"], "last": r["landed"], "_knobs": {}})
+        c["runs"].append({"bundle_id": r["id"], "title": r["title"], "landed": r["landed"]})
+        c["first"], c["last"] = min(c["first"], r["landed"]), max(c["last"], r["landed"])
+        for knob, value in r["knobs"]:
+            c["_knobs"].setdefault(knob, set()).add(value)
+    listed = []
+    for c in sorted(found.values(), key=lambda c: c["last"], reverse=True):
+        c["knobs_varied"] = sorted(k for k, values in c.pop("_knobs").items() if len(values) > 1)
+        c["runs"].sort(key=lambda run: run["landed"], reverse=True)
+        listed.append(c)
+    return {"campaigns": listed, "runs_not_in_a_campaign": outside}
+
+
 def _named_values(values: dict[str, Any], what: str) -> dict[str, dict[str, Any]]:
     """{name: value} or {name: {"value", "units", "spread"}} -> the second form."""
     out = {}

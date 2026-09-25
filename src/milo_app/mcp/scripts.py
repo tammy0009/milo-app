@@ -86,8 +86,13 @@ BUNDLE_CONTRACT = {
         "<bundle_id>/INPUT/files/": "every input file (structures, settings dumps, the script)",
         "<bundle_id>/OUTPUT/outputs.json": "every output: {name: {value, units, ...}}",
         "<bundle_id>/OUTPUT/files/": "every output file (structures, reports, trajectories, job files)",
-        "<bundle_id>/bundle.json": "bundle_id, product, module, task, status, start, finish, time_elapsed (written LAST)",
+        "<bundle_id>/bundle.json": "bundle_id, product, module, task, status, start, finish, time_elapsed, and "
+        "campaign when the run is part of one (written LAST)",
     },
+    "campaign": "optional: the name of a series of similar runs (the same experiment, different knob settings). "
+    "Ask the user before writing a script whether the runs belong to a campaign, a new one they name or an "
+    "existing one (milo_list_campaigns), and pass it to the writer; leave it out for a run that is not part of one. "
+    "The MILO app groups runs by it and can work out models and formulas within one campaign.",
     "guarantees": [
         "unique random bundle_id",
         "all inputs used, reported by the script at runtime (explicit settings + full SaveSettings dump)",
@@ -115,7 +120,7 @@ BUNDLE_CONTRACT = {
     ],
     "checked_by": "milo_check_script runs the script against a fake BIOVIA and verifies the bundle it writes",
     "writer_usage_python": [
-        "bundle = MiloBundle(MILO_BUNDLE_ID, product, module, task, MILO_DROP_DIR)",
+        "bundle = MiloBundle(MILO_BUNDLE_ID, product, module, task, MILO_DROP_DIR, title=..., campaign=MILO_CAMPAIGN)",
         "bundle.input(name, value, units) / bundle.output(name, value, units)",
         "doc.Export(bundle.input_path('x.xsd')) / bundle.output_path(...) / bundle.input_file(path) / bundle.output_file(path)",
         "snap = bundle.snapshot(); ...; bundle.capture_new_files(snap, 'OUTPUT')  # every file BIOVIA wrote",
@@ -127,7 +132,8 @@ BUNDLE_CONTRACT = {
         "Discovery Studio scripts are Perl: use strict; use MdmDiscoveryScript; use ProtocolDiscoveryScript;",
         "my $MILO_BUNDLE_ID = '<uuid>'; my $MILO_DROP_DIR = '<drop dir as seen on the VM>';  # keep these two lines",
         "my $bundle = MiloBundle->new(bundle_id => $MILO_BUNDLE_ID, product => 'Discovery Studio', module => ..., "
-        "task => ..., drop_dir => $MILO_DROP_DIR, work_dir => DiscoveryScript::GetTemporaryFolder(), title => ...);",
+        "task => ..., drop_dir => $MILO_DROP_DIR, work_dir => DiscoveryScript::GetTemporaryFolder(), title => ..., "
+        "campaign => $MILO_CAMPAIGN);  # campaign: the name, or undef",
         "$bundle->input(name, value, units) / $bundle->output(name, value, units)",
         "$document->Save($bundle->input_path('x.dsv'), 'dsv') / $bundle->output_path(...) / $bundle->input_file($0, 'script.pl')",
         "my $task = $bundle->timed(sub { my $t = $session->Launch($protocol, $mb, True, False); $t->WaitForCompletion(); $t });",
@@ -237,7 +243,9 @@ def _merge_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
     return merged
 
 
-def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None) -> dict[str, Any]:
+def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None,
+                    campaign: str | None = None) -> dict[str, Any]:
+    """campaign: the campaign the run belongs to, or None / "" for a run that is not part of one."""
     if kind not in SCRIPTS:
         raise ValueError(f"Unknown script '{kind}'. Available: {', '.join(SCRIPTS)}")
     spec = SCRIPTS[kind]
@@ -246,6 +254,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
     bundle_id = str(uuid.uuid4())
     drop = drop_dir_vm or settings.drop_dir_vm
     language = spec["language"]
+    campaign = (campaign or "").strip() or None
 
     if language == "perl":
         # Perl single-quoted strings turn "\\" into "\": escape the drop path so UNC paths survive.
@@ -266,6 +275,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         .replace("{{DROP_DIR}}", drop_text)
         .replace("{{PARAMS}}", params_text)
         .replace("{{TITLE}}", str(title).replace("\n", " "))
+        .replace("{{CAMPAIGN}}", perl_literal(campaign) if language == "perl" else repr(campaign))
     )
     out_dir = settings.data_dir / "generated_scripts"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -278,6 +288,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         "product": spec["product"],
         "language": spec["language"],
         "params": merged,
+        "campaign": campaign,
         "drop_dir_in_script": drop,
         "saved_copy": str(saved),
         "syntax_check": check_syntax(script, language),
@@ -291,4 +302,4 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
 
 
 def generate_test_script(kind: str = "ms_forcite_geomopt", drop_dir_vm: str | None = None) -> dict[str, Any]:
-    return generate_script(kind, None, drop_dir_vm)
+    return generate_script(kind, None, drop_dir_vm, None)

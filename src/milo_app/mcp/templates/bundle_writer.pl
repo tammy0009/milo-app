@@ -1,7 +1,8 @@
-# ===================== MILO bundle writer (contract 0.1, Perl) — do not edit =====================
+# ===================== MILO bundle writer (contract 0.2, Perl) — do not edit =====================
 # Builds a MILO sim bundle with INPUT and OUTPUT fully separated:
 #   <bundle_id>/INPUT/inputs.json + INPUT/files/   <bundle_id>/OUTPUT/outputs.json + OUTPUT/files/
-#   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed)
+#   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed,
+#                             and campaign when the run is part of one)
 # The bundle is staged in the work folder, then copied to MILO_DROP_DIR (bundle.json copied last).
 # Core Perl modules only (Discovery Studio ships a full Perl), and no JSON module: values are written by hand
 # so numbers stay numbers and names keep the order the script recorded them in.
@@ -19,7 +20,7 @@ use POSIX ();
 use Scalar::Util ();
 use Time::HiRes ();
 
-our $CONTRACT = "0.1";
+our $CONTRACT = "0.2";
 our $LAST_TRACE;  # stack of the most recent die, for record_error
 $SIG{__DIE__} = sub { $LAST_TRACE = Carp::longmess("$_[0]") };
 
@@ -133,6 +134,11 @@ sub new {
         time_elapsed => undef, time_elapsed_units => "s", milo_contract => text($CONTRACT),
     );
     while (my ($key, $value) = splice(@manifest, 0, 2)) { $self->{manifest}->set($key, $value) }
+    # A campaign is a named series of similar runs; a run that is not part of one carries no campaign field.
+    if (defined $args{campaign} && $args{campaign} =~ /\S/) {
+        (my $campaign = $args{campaign}) =~ s/^\s+|\s+$//g;
+        $self->{manifest}->set(campaign => text($campaign));
+    }
     File::Path::make_path(File::Spec->catdir($self->{root}, $_, "files")) for qw(INPUT OUTPUT);
     return $self;
 }

@@ -8,6 +8,10 @@ typeset like LaTeX (latex.py; "Copy LaTeX" puts the source on the clipboard):
 Each number carries its ± uncertainty, next to how well the line fits, how sure the relationship is
 (from the relationship nodes), and, with one explaining descriptor, a chart of the runs, the line and
 its 90 % band. A small calculator turns values of the explaining descriptors into a guess.
+
+The campaign picker at the top narrows all of it to one campaign's runs (or the runs in no
+campaign): the stored math is over every run and stays as it is; this works it out again over just
+those runs, so a campaign can be looked at on its own.
 The formula is predict.formula(): the same Bayesian linear regression as the models (ghost.md 4.1).
 """
 from __future__ import annotations
@@ -24,12 +28,26 @@ from PySide6.QtWidgets import (
 )
 
 from milo_app import predict
+from milo_app.graph import campaign_of
 from milo_app.ui import latex, prefs, theme
-from milo_app.ui.format import pretty_name, prior_text, sig, units_text
+from milo_app.ui.format import landed, pretty_name, prior_text, sig, units_text
 
 KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 SECTIONS = (("bundle", "Bundle"), ("input", "Inputs"), ("output", "Outputs"))
 C = theme.CHART
+
+
+ALL_RUNS = "*"  # the campaign picker's "All runs"
+NO_CAMPAIGN = ""  # its "None": the runs in no campaign
+
+
+def run_campaign(sim: dict[str, Any]) -> str | None:
+    """The campaign of a run in graph.descriptor_table(), or None."""
+    return campaign_of({"campaign": sim["values"].get("bundle:campaign", (None,))[0]})
+
+
+def run_landed(sim: dict[str, Any]) -> str:
+    return landed({k: sim["values"].get(f"bundle:{k}", (None,))[0] for k in ("finish", "start")})
 
 
 def name(key: str) -> str:
@@ -132,8 +150,11 @@ class FitChart(QWidget):
 class FormulaView(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.table: list[dict[str, Any]] = []
+        self.all_table: list[dict[str, Any]] = []  # every run
+        self.all_relationships: list[dict[str, Any]] = []  # the stored ones, over every run
+        self.table: list[dict[str, Any]] = []  # the runs in the chosen campaign (or every run)
         self.relationships: list[dict[str, Any]] = []
+        self.tests: list[dict[str, Any]] = []
         self.titles: dict[str, str] = {}
         self.checked: list[str] = []
         self.fit: dict[str, Any] | None = None
@@ -156,9 +177,16 @@ class FormulaView(QWidget):
             self.tree.addTopLevelItem(item)
             item.setExpanded(source == "output")
             self.sections[source] = item
+        # which runs the math uses: every run, one campaign, or the runs in no campaign
+        self.scope = QComboBox()
+        self.scope.setToolTip("Work out the formulas and relationships from only these runs")
+        self.scope.currentIndexChanged.connect(lambda _i: self._apply_scope())
         box = QVBoxLayout(side)
         box.setContentsMargins(14, 14, 8, 10)
         box.setSpacing(8)
+        box.addWidget(QLabel("CAMPAIGN", objectName="PanelTitle"))
+        box.addWidget(self.scope)
+        box.addSpacing(6)
         box.addWidget(QLabel("DESCRIPTORS WITH NUMBERS", objectName="PanelTitle"))
         box.addWidget(self.filter)
         box.addWidget(self.tree, 1)
@@ -251,12 +279,50 @@ class FormulaView(QWidget):
     # ---- data
 
     def set_data(self, table: list[dict[str, Any]], relationships: list[dict[str, Any]], titles: dict[str, str]) -> None:
-        """Called whenever the graph changes; keeps what is checked."""
-        self.table, self.relationships, self.titles = table, relationships, titles
+        """Called whenever the graph changes; keeps the campaign and what is checked."""
+        self.all_table, self.all_relationships, self.titles = table, relationships, titles
+        self._fill_scopes()
+        self._apply_scope()
+
+    def _fill_scopes(self) -> None:
+        """Every run, then each campaign newest first (by its latest run), then the runs in no campaign."""
+        current = self.scope.currentData() if self.scope.count() else self.store.value("formula_campaign", ALL_RUNS)
+        latest: dict[str | None, str] = {}
+        counts: dict[str | None, int] = {}
+        for sim in self.all_table:
+            c = run_campaign(sim)
+            latest[c] = max(latest.get(c, ""), run_landed(sim))
+            counts[c] = counts.get(c, 0) + 1
+        self.scope.blockSignals(True)
+        self.scope.clear()
+        self.scope.addItem(f"All runs · {len(self.all_table)}", ALL_RUNS)
+        for c in sorted((c for c in latest if c is not None), key=latest.get, reverse=True):
+            self.scope.addItem(f"{c} · {counts[c]}", c)
+        if None in latest:
+            self.scope.addItem(f"None (no campaign) · {counts[None]}", NO_CAMPAIGN)
+        found = self.scope.findData(current)
+        self.scope.setCurrentIndex(found if found >= 0 else 0)
+        self.scope.blockSignals(False)
+
+    def _apply_scope(self) -> None:
+        """Use only the chosen campaign's runs for everything on this page: the descriptors listed, the
+        formula and its chart, the relationships (worked out again over just those runs), and the
+        track record."""
+        scope = self.scope.currentData()
+        if scope is None:
+            return
+        self.store.setValue("formula_campaign", scope)
+        if scope == ALL_RUNS:
+            self.table, self.relationships = self.all_table, self.all_relationships
+        else:
+            self.table = [s for s in self.all_table if (run_campaign(s) or NO_CAMPAIGN) == scope]
+            self.relationships = predict.relationships_in(self.table)
+        catalog = predict.formula_catalog(self.table)
+        self.checked = [k for k in self.checked if any(e["key"] == k for e in catalog)]
         self._filling = True
         for section in self.sections.values():
             section.takeChildren()
-        for entry in predict.formula_catalog(table):
+        for entry in catalog:
             item = QTreeWidgetItem([name(entry["key"])])
             item.setData(0, KEY_ROLE, entry["key"])
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
@@ -266,11 +332,28 @@ class FormulaView(QWidget):
             self.sections[entry["key"].partition(":")[0]].addChild(item)
         self._filling = False
         self._apply_filter(self.filter.text())
+        self._show_track()
         self._recompute()
 
+    def _scope_words(self) -> str:
+        """How the chosen runs read in a sentence: "", " in PLA/PCL sweep", " in no campaign"."""
+        scope = self.scope.currentData()
+        return "" if scope in (None, ALL_RUNS) else " in no campaign" if scope == NO_CAMPAIGN else f" in {scope}"
+
     def set_track(self, tests: list[dict[str, Any]]) -> None:
-        """How the blind predictions of real runs have gone so far (blind.py; ghost.md 7.3)."""
+        self.tests = tests
+        self._show_track()
+
+    def _show_track(self) -> None:
+        """How the blind predictions of real runs have gone so far (blind.py; ghost.md 7.3), for the
+        runs in the chosen campaign."""
+        ids = {s["id"] for s in self.table}
+        tests = [t for t in self.tests if t.get("bundle_id") in ids]
         done = [t for t in tests if t.get("testable")]
+        where = self._scope_words()
+        if not done and where:
+            self.track.setText(f"No run{where} has been blind-tested yet.")
+            return
         if not done:
             untestable = len(tests) - len(done)
             self.track.setText("No blind tests yet. The next run that arrives is predicted before it is added, "
@@ -284,7 +367,7 @@ class FormulaView(QWidget):
         inside = sum(t.get("inside") or 0 for t in done)
         stated = [t["stated"] * t["values"] for t in done if isinstance(t.get("stated"), (int, float)) and t.get("values")]
         expected = sum(stated) / values if values and stated else None
-        text = (f"{len(done)} run{'s' if len(done) != 1 else ''} predicted blind before arriving.\n"
+        text = (f"{len(done)} run{'s' if len(done) != 1 else ''}{where} predicted blind before arriving.\n"
                 f"Values right (within 5 %): {right} of {values} ({right / values:.0%})"
                 + (f"; confidence said {expected:.0%}" if expected is not None else "") + ".")
         if ranged:
@@ -313,6 +396,10 @@ class FormulaView(QWidget):
             self.solve.setCurrentIndex(self.checked.index(current))
         self.solve.blockSignals(False)
         target = self.solve.currentData()
+        if len(self.table) < 2:
+            self.fit = None
+            runs = f"{len(self.table)} run" + ("s" if len(self.table) != 1 else "")
+            return self._show(f"Only {runs}{self._scope_words()} so far: a formula needs at least 2 runs.")
         if len(self.checked) < 2 or target is None:
             self.fit = None
             return self._show("Check two or more descriptors on the left. The last one checked is solved for; "
@@ -367,7 +454,7 @@ class FormulaView(QWidget):
         rows += [
             ("Fit", f"R² = {fit['r2']:.3f}: the line explains {max(fit['r2'], 0):.0%} of how "
                     f"{name(fit['target'])} varies across these runs" if fit.get("r2") is not None else "n/a"),
-            ("Runs used", f"{fit['n']} (every run that has all of these)"),
+            ("Runs used", f"{fit['n']} (every run{self._scope_words()} that has all of these)"),
             ("Scatter", f"± {number(fit['noise_sd'], 3)}{units} run to run (estimated)" if fit.get("noise_sd") else "n/a"),
             ("Method", "Bayesian linear regression (ghost.md 4.1). ± is each slope's own uncertainty;\n"
                        "the line is fitted anew whenever runs arrive."),
@@ -467,7 +554,8 @@ class FormulaView(QWidget):
                 sure = rel.get("confidence")
                 if not isinstance(sure, (int, float)):
                     return "not scored"
-                return f"{sure:.0%} sure it is real (Efron's local false discovery rate, over {rel.get('n')} runs)"
+                return (f"{sure:.0%} sure it is real (Efron's local false discovery rate, over {rel.get('n')} "
+                        f"runs{self._scope_words()})")
         return "not scored yet"
 
     def _apply_filter(self, text: str) -> None:

@@ -13,6 +13,10 @@ Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bun
   bundle.json           (written last: its presence means the run is finished)
 ```
 
+`bundle.json` may also carry a `campaign`: the name of a series of similar runs (the same experiment,
+different knob settings). It is optional; a run that is not part of one has no `campaign` field. The
+app takes it in like any other field, so it is also a descriptor ("Campaign = PLA/PCL sweep").
+
 ## What you need
 
 - **Windows 10 or 11.** The app starts Docker Desktop itself from its standard install folder.
@@ -117,8 +121,12 @@ Which descriptors appear is chosen with the check boxes in the left sidebar: eve
 field, input, and output is listed there, so a new field (e.g. `campaign`) shows up the moment a
 bundle has it. Each distinct value is its own node ("time_elapsed = 3.78 min"), linked to the
 sims that have that value.
-Under the fields, the **Sim Feed** lists every run, newest first, by title and the time it landed
-(its finish time). Uncheck a run to take it and its ghosts off the graph; new runs arrive checked.
+Under the fields, the runs, each with a check box: uncheck a run to take it and its ghosts off the
+graph; new runs arrive checked.
+- **Campaigns**: one dropdown per campaign, newest first (the one with the latest run on top), its
+  runs inside. The campaign's own box shows or hides all of them. Runs in no campaign are under **None**.
+- **Sim Feed**: every run, newest first, by title and the time it landed (its finish time).
+A run's box in Campaigns and in the Sim Feed is the same switch.
 A relationship pulls in its two descriptors even if they are not checked (in grey). What you
 check is remembered between launches.
 
@@ -130,7 +138,9 @@ The old MILO database (`milo-neo4j`, 7474/7687) is separate and untouched.
 The MCP lives here too (`src/milo_app/mcp/`): it writes BIOVIA scripts (Materials Studio Python,
 Discovery Studio Perl) whose output is a MILO bundle, searches the BIOVIA docs, checks scripts before
 they go to the VM, and reads and adds to this app's graph (`milo_graph_data`, `milo_add_prediction`,
-`milo_remove_prediction`). It is a local stdio server; Claude Code runs it with:
+`milo_remove_prediction`). Before it writes a script it asks whether the runs are part of a campaign,
+a new one you name or an existing one (`milo_list_campaigns`), and writes the name into the bundle.
+It is a local stdio server; Claude Code runs it with:
 
 ```powershell
 claude mcp add milo -s user -- uv --directory C:\path\to\milo-app run milo-mcp

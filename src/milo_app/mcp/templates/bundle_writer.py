@@ -1,7 +1,8 @@
-# ===================== MILO bundle writer (contract 0.1) — do not edit =====================
+# ===================== MILO bundle writer (contract 0.2) — do not edit =====================
 # Builds a MILO sim bundle with INPUT and OUTPUT fully separated:
 #   <bundle_id>/INPUT/inputs.json + INPUT/files/   <bundle_id>/OUTPUT/outputs.json + OUTPUT/files/
-#   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed)
+#   <bundle_id>/bundle.json  (written LAST; bundle_id, product, module, task, status, start, finish, time_elapsed,
+#                             and campaign when the run is part of one)
 # The bundle is staged in the job folder, then copied to MILO_DROP_DIR (bundle.json copied last).
 # Standard library only, and only modules Materials Studio's trimmed Python ships (it has no json, socket, zipfile).
 import datetime as _milo_dt
@@ -12,7 +13,7 @@ import sys as _milo_sys
 import time as _milo_time
 import traceback as _milo_traceback
 
-MILO_CONTRACT = "0.1"
+MILO_CONTRACT = "0.2"
 
 
 def _milo_now():
@@ -87,7 +88,7 @@ def _milo_json_text(value, level=0):
 
 
 class MiloBundle:
-    def __init__(self, bundle_id, product, module, task, drop_dir, work_dir=None, title=None):
+    def __init__(self, bundle_id, product, module, task, drop_dir, work_dir=None, title=None, campaign=None):
         self.bundle_id = bundle_id
         self.drop_dir = drop_dir
         self.work_dir = _milo_os.path.abspath(work_dir or _milo_os.getcwd())
@@ -109,6 +110,10 @@ class MiloBundle:
             "time_elapsed_units": "s",
             "milo_contract": MILO_CONTRACT,
         }
+        # A campaign is a named series of similar runs (the same experiment, different knob settings).
+        # Optional: a run that is not part of one carries no campaign field at all.
+        if campaign and str(campaign).strip():
+            self.manifest["campaign"] = str(campaign).strip()
         for sector in ("INPUT", "OUTPUT"):
             _milo_os.makedirs(_milo_os.path.join(self.root, sector, "files"), exist_ok=True)
 

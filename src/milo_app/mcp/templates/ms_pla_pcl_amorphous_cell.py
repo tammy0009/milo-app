@@ -16,6 +16,7 @@ from PyMaterialsScript import *
 
 MILO_BUNDLE_ID = "{{BUNDLE_ID}}"
 MILO_DROP_DIR = r"{{DROP_DIR}}"
+MILO_CAMPAIGN = {{CAMPAIGN}}  # the campaign this run belongs to, or None
 MILO_PARAMS = {{PARAMS}}
 
 {{BUNDLE_WRITER}}
@@ -27,7 +28,7 @@ SCRIPT_T0 = _milo_time.perf_counter()
 TAG = "PLA%02d_PCL%02d" % (round(100 * P["pla_mass_fraction"]), round(100 * (1 - P["pla_mass_fraction"])))
 bundle = MiloBundle(MILO_BUNDLE_ID, "Materials Studio", "Amorphous Cell + Forcite",
                     "PLA/PCL amorphous cell: construction, geometry optimization, NPT dynamics", MILO_DROP_DIR,
-                    title="%s amorphous cell" % TAG.replace("_", "/"))
+                    title="%s amorphous cell" % TAG.replace("_", "/"), campaign=MILO_CAMPAIGN)
 
 
 def elapsed():
