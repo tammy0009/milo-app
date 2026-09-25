@@ -265,6 +265,24 @@ our %KNOWN = (
         ["pH for Protonation", 7.4, "DoubleType"],
     ],
 );
+# Every protocol that has run on the VM: its real parameter list, which MILO keeps from each run's dump
+# (milo_app/mcp/protocols.py), so the checker refuses what the real protocol would refuse.
+if (my $dir = $ENV{MILO_FAKE_DS_PROTOCOLS}) {
+    if (opendir(my $dh, $dir)) {
+        for my $file (sort grep { /\.tsv$/ } readdir $dh) {
+            open(my $fh, "<", "$dir/$file") or next;
+            my ($name, @rows);
+            while (my $line = <$fh>) {
+                $line =~ s/[\r\n]+$//;
+                if ($line =~ /^# protocol: (.+)$/) { $name = $1; next }
+                next if $line =~ /^#/ || $line =~ /^name\ttype\t/ || !length $line;
+                my ($key, $type, $value) = split /\t/, $line, 3;
+                push @rows, [$key, $value // "", $type // "StringType"];
+            }
+            $KNOWN{$name} = \@rows if defined $name && @rows;
+        }
+    }
+}
 
 package Protocol::ParameterMap;
 sub Create { return bless {keys => [], values => {}}, "Protocol::ParameterMap" }
@@ -303,6 +321,8 @@ sub DefaultSession {
 sub Create {
     my ($name, $session) = @_;
     ($name, $session) = @{$name}{qw(ProtocolName Session)} if ref $name;
+    print "MILO-CHECK: protocol '$name' has never run on the VM: its parameter names and types were not checked\n"
+        unless exists $Protocol::KNOWN{$name};
     my $map = Protocol::ParameterMap::Create();
     my %types;
     for my $p (@{$Protocol::KNOWN{$name} || []}) { $map->AddItem($p->[0], $p->[1]); $types{$p->[0]} = $p->[2] }

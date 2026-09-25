@@ -12,6 +12,7 @@ from typing import Any
 from milo_app import graph as app_graph
 from milo_app.config import get_settings
 from milo_app.mcp import molecules as molecule_memory
+from milo_app.mcp import protocols
 
 TEMPLATES = Path(__file__).parent / "templates"
 HARNESS_DS = Path(__file__).parent / "harness_ds"  # fake DiscoveryScript, so `use MdmDiscoveryScript;` resolves
@@ -65,7 +66,11 @@ SCRIPTS: dict[str, dict[str, Any]] = {
         "molecule saved in MILO's molecule memory, copied in exactly; or input_file: a file on the VM) "
         "typed with a forcefield and passed as structure_parameter, every requested protocol parameter applied "
         "(unknown names stop the run) and recorded as requested.<name> (the knobs MILO models), the protocol's full parameter set dumped into INPUT, then every file in "
-        "the run folder and every property of every result molecule recorded as OUTPUT. "
+        "the run folder and every property of every result molecule, .pK table (name value) and .csv table "
+        "(one output per column) recorded as OUTPUT, labelled by where the protocol wrote it: FINAL (Output/: "
+        "plain FINAL when it is the only one of its kind, else FINAL.<name>), intermediate.<path>, "
+        "protocol_input.<path>. Parameters are checked against the protocol's real list once it has run on "
+        "the VM (a protocol that never has is flagged unverified). "
         'parameters: {"Protocol Parameter Name": value} or {name: [value, "units"]}; look the exact names '
         'up with milo_search_docs ("<protocol> - Parameters"). forcefield "" skips typing.',
         "params": {
@@ -357,6 +362,10 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
                              "(milo_save_molecule)")
         merged["input_molecule"] = found["name"]  # its saved name: the key it has in MILO_MOLECULES
     wanted = [merged["input_molecule"]] if merged.get("input_molecule") else []
+    warnings: list[str] = []
+    if kind == "ds_protocol":  # checked against the protocol's real parameter list, once it has run on the VM
+        structure = merged["structure_parameter"] if merged["input_molecule"] or merged["input_file"] else None
+        warnings = protocols.validate(merged["protocol_name"], merged["parameters"], structure)
 
     if language == "perl":
         # Perl single-quoted strings turn "\\" into "\": escape the drop path so UNC paths survive.
@@ -399,6 +408,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         "drop_dir_in_script": drop,
         "saved_copy": str(saved),
         "syntax_check": check_syntax(script, language),
+        "warnings": warnings,
         "script": script,
         "next_steps": [
             run_step,

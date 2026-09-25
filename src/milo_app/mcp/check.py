@@ -22,6 +22,7 @@ from milo_app.blind import bundle_values
 from milo_app.bundle import find_bundles, read_bundle
 from milo_app.config import get_settings
 from milo_app.mcp import molecules as molecule_memory
+from milo_app.mcp import protocols
 from milo_app.mcp.scripts import (
     campaign_choice, check_perl_syntax, check_python_syntax, fill_molecules, perl_command, perl_string,
 )
@@ -102,7 +103,8 @@ def check_script(script: str, timeout_s: int = 180, product: str = "materials_st
                 lambda m: "%s$MILO_DROP_DIR = %s;" % (m.group(1) or "", perl_string(drop)), script, count=1)
             script_path = job / "milo_candidate_script.pl"
             command = perl_command(script_path.name)
-            env = dict(os.environ, COMPUTERNAME="MILO-CHECK")
+            protocols.learn()  # the real parameter lists of every protocol that has run on the VM
+            env = dict(os.environ, COMPUTERNAME="MILO-CHECK", MILO_FAKE_DS_PROTOCOLS=str(protocols.store()))
         else:
             patched, replaced = DROP_LINE.subn(lambda _m: 'MILO_DROP_DIR = r"%s"' % drop, script, count=1)
             script_path = job / "milo_candidate_script.py"
@@ -126,6 +128,9 @@ def check_script(script: str, timeout_s: int = 180, product: str = "materials_st
             "harness": "fake %s: proves the bundle, not the BIOVIA calls"
                        % ("DiscoveryScript (Perl)" if perl else "PyMaterialsScript (Python)"),
         }
+        warnings = [line.partition("MILO-CHECK: ")[2] for line in run.stdout.splitlines() if line.startswith("MILO-CHECK: ")]
+        if warnings:
+            result["warnings"] = warnings
         if not replaced:
             result["note_drop_dir"] = "no MILO_DROP_DIR line found; delivery to the drop folder was not exercised"
         if run.returncode != 0:
@@ -175,6 +180,8 @@ def check_script(script: str, timeout_s: int = 180, product: str = "materials_st
                 problems.append("molecule %r is in the script but never used: load it with molecule_file(%r, "
                                 "MILO_MOLECULES), never with a typed-in structure" % (name, name))
         outputs = {item.name: item.value for item in bundle.items_in("OUTPUT")}
+        if bundle.manifest.get("status") == "failed":
+            problems.insert(0, "the run failed: %s" % (outputs.get("error") or "no error recorded"))
         saved = get_settings().data_dir / "generated_scripts" / (
             "checked_%s.%s" % (bundle.bundle_id, "pl" if perl else "py"))
         saved.parent.mkdir(parents=True, exist_ok=True)

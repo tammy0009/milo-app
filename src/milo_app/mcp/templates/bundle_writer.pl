@@ -329,6 +329,69 @@ sub record_molecules {
     }
 }
 
+# What a file in a protocol's run folder is, from where it sits: Output/ holds the protocol's final results
+# (FINAL), Intermediate/ the steps on the way (intermediate.<path>), Input/ the input as the server received
+# it (protocol_input.<path>). A final file that is the only one of its kind (the only structure, the only
+# .pK table) is plain FINAL; several of a kind are FINAL.<name>. Two files that differ only by extension
+# (1SVN_clean.dsv and 1SVN_clean.mol2) keep it, so neither overwrites the other.
+sub result_label {
+    my ($self, $rel, $files) = @_;
+    (my $path = $rel) =~ s{\\}{/}g;
+    my $kind = _result_kind($path);
+    (my $stem = $path) =~ s{\.(\w+)$}{};
+    my $ext = $1 // "";
+    my $twins = grep { (my $other = $_) =~ s{\\}{/}g; $other =~ s{\.\w+$}{}; $other eq $stem } @$files;
+    my $name = $twins > 1 ? "$stem.$ext" : $stem;
+    return "intermediate.$1" if $name =~ m{^Intermediate/(.+)$}i;
+    return "protocol_input.$1" if $name =~ m{^Input/(.+)$}i;
+    return "run.$name" unless $name =~ m{^Output/}i;
+    my $alike = grep { m{^Output[/\\]}i && _result_kind($_) eq $kind } @$files;
+    return $alike == 1 ? "FINAL" : "FINAL." . File::Basename::basename($name);
+}
+sub _result_kind { my ($ext) = $_[0] =~ /\.(\w+)$/; $ext = lc($ext // ""); return $ext =~ /^(dsv|msv|sd|sdf|mol|mol2|pdb)$/ ? "structure" : $ext }
+
+# A "name value" table with one header line (Discovery Studio .pK: "Residue  Calculated pK", then one
+# residue per line): each row becomes <label>.<name>. Returns how many rows were recorded.
+sub record_name_value_table {
+    my ($self, $label, $path) = @_;
+    open(my $fh, "<", $path) or return 0;
+    my (@rows, $header);
+    while (my $line = <$fh>) {
+        $line =~ s/^\s+|\s+$//g;
+        next unless length $line;
+        next if !$header++;  # the header line
+        my ($name, $value) = split /\s+/, $line, 2;
+        return 0 unless defined $value && Scalar::Util::looks_like_number($value);  # not such a table: keep it as a file
+        push @rows, [$name, $value + 0];
+    }
+    $self->output("$label.$_->[0]", $_->[1]) for @rows;
+    return scalar @rows;
+}
+
+# A comma-separated table with a header row (Prepare Proteins' pH curve: pH, Total Charge, energies, the
+# protonated fraction of every residue): each column becomes <label>.<column>, holding the whole column.
+# Anything that is not a rectangular table is left as a file. Returns how many columns were recorded.
+sub record_csv_table {
+    my ($self, $label, $path) = @_;
+    open(my $fh, "<", $path) or return 0;
+    my $head = <$fh>;
+    return 0 unless defined $head;
+    $head =~ s/^\x{FEFF}|^\xEF\xBB\xBF//;
+    my @names = map { s/^\s+|\s+$//gr } split /,/, $head =~ s/[\r\n]+$//r;
+    return 0 unless @names > 1 && !grep { !length } @names;
+    my @columns = map { [] } @names;
+    while (my $line = <$fh>) {
+        $line =~ s/[\r\n]+$//;
+        next unless length $line;
+        my @cells = map { s/^\s+|\s+$//gr } split /,/, $line, -1;
+        return 0 unless @cells == @names;
+        push @{$columns[$_]}, (Scalar::Util::looks_like_number($cells[$_]) ? $cells[$_] + 0 : $cells[$_]) for 0 .. $#names;
+    }
+    return 0 unless @{$columns[0]};
+    $self->output("$label.$names[$_]", $columns[$_]) for 0 .. $#names;
+    return scalar @names;
+}
+
 # A protocol task's final state, its log, and every file in its RunPath.
 sub record_task {
     my ($self, $stage, $task) = @_;

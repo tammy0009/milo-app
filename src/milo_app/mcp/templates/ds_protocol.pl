@@ -119,12 +119,17 @@ eval {
         my $files = $bundle->record_task(undef, $task);
         my $state = $bundle->safe($task, "State");
         my $ok = defined $state && $state eq Protocol::taskComplete && $bundle->safe($task, "IsProtocolSuccessful");
-        for my $rel (grep { /\.(dsv|msv|sd|sdf|mol|mol2|pdb)$/i } @$files) {
-            my $result = eval { DiscoveryScript::Open({Path => $task->RunPath . "/" . $rel, LoadAllObjects => True}) };
-            if (!$result) { $bundle->output("unreadable.$rel", "$@"); next }
-            (my $label = $rel) =~ s{\.\w+$}{};
-            $label =~ s{^Output/}{};
-            $bundle->record_molecules("result.$label", $result);
+        # every structure and table the protocol wrote, labelled FINAL (Output/), intermediate.* or protocol_input.*
+        for my $rel (@$files) {
+            my $path = $task->RunPath . "/" . $rel;
+            my $label = $bundle->result_label($rel, $files);
+            if ($rel =~ /\.(dsv|msv|sd|sdf|mol|mol2|pdb)$/i) {
+                my $result = eval { DiscoveryScript::Open({Path => $path, LoadAllObjects => True}) };
+                if (!$result) { $bundle->output("unreadable.$rel", "$@"); next }
+                $bundle->record_molecules($label, $result);
+            }
+            elsif ($rel =~ /\.pK$/i) { eval { $bundle->record_name_value_table("$label.pK", $path) } }
+            elsif ($rel =~ /\.csv$/i && (-s $path || 0) < 5_000_000) { eval { $bundle->record_csv_table("$label.csv", $path) } }
         }
         $status = $ok ? "succeeded" : "failed";
     });
