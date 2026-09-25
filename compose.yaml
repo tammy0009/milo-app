@@ -1,0 +1,20 @@
+# MILO's graph. Its own container, volume and ports, so it never touches the old MILO database
+# (milo-neo4j on 7474/7687). The project name is pinned so the database is the same one
+# wherever the app is run from.
+name: milo-app
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: milo-app-neo4j
+    ports:
+      - "7475:7474"   # Neo4j Browser: http://localhost:7475
+      - "7688:7687"   # Bolt (the app connects here)
+    environment:
+      NEO4J_AUTH: neo4j/${MILO_NEO4J_PASSWORD:-milo-app-password}
+    volumes:
+      - milo-app-neo4j-data:/data
+    restart: unless-stopped
+
+volumes:
+  milo-app-neo4j-data:

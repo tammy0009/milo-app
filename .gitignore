@@ -1,0 +1,11 @@
+# Rebuilt by `uv sync`
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime state: calculation records, the app log, the runs-seen ledger, stale Docker folders
+data/
+
+# Local settings (database password); .env.example is the template
+.env

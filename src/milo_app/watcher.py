@@ -1,0 +1,104 @@
+"""Keeps the graph in step with the drop folder, on a background thread.
+
+Every few seconds: find the bundle folders (bundle.json is written last, so only finished runs
+count), fingerprint each one (file count, total size, newest change), and ingest any that are new
+or changed. A fingerprint has to hold still across two looks before it is ingested, so a bundle
+still being copied in from the VM is never read half-way.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from pathlib import Path
+
+from neo4j import Driver
+from PySide6.QtCore import QObject, Signal
+
+from milo_app import blind, graph
+from milo_app.bundle import find_bundles, read_bundle
+
+log = logging.getLogger(__name__)
+
+
+def fingerprint(folder: Path) -> str:
+    count = size = newest = 0
+    for path in folder.rglob("*"):
+        if path.is_file():
+            st = path.stat()
+            count, size, newest = count + 1, size + st.st_size, max(newest, st.st_mtime_ns)
+    return f"{count}:{size}:{newest}"
+
+
+class Watcher(QObject):
+    ingested = Signal(str, str)  # bundle_id, title
+    failed = Signal(str, str)  # folder, error
+    scanned = Signal(int)  # bundles seen in the drop folder
+
+    def __init__(self, driver: Driver, drop_dir: Path, every: float) -> None:
+        super().__init__()
+        self.driver, self.drop_dir, self.every = driver, drop_dir, every
+        self._wake, self._stop = threading.Event(), threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="milo-watcher", daemon=True)
+        self._known: dict[str, str] = {}  # source_path -> fingerprint already in the graph
+        self._pending: dict[str, str] = {}  # source_path -> fingerprint seen once, waiting to settle
+        self._broken: dict[str, str] = {}  # source_path -> fingerprint that failed; retried when it changes
+
+    def start(self) -> None:
+        self._known = graph.fingerprints(self.driver)
+        self._thread.start()
+
+    def scan_now(self) -> None:
+        self._wake.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._scan()
+            except Exception:  # noqa: BLE001 - one bad pass must not end the watching
+                log.exception("scan failed")
+            self._wake.wait(self.every)
+            self._wake.clear()
+
+    def _predict_blind(self, bundle):
+        try:
+            return blind.predict_new_run(self.driver, bundle)
+        except Exception:  # noqa: BLE001
+            log.exception("could not predict %s blind", bundle.bundle_id)
+            return None
+
+    def _scan(self) -> None:
+        if not self.drop_dir.is_dir():
+            self.scanned.emit(0)
+            return
+        folders = find_bundles(self.drop_dir)
+        self.scanned.emit(len(folders))
+        for folder in folders:
+            if self._stop.is_set():
+                return
+            key, fp = str(folder), fingerprint(folder)
+            if self._known.get(key) == fp or self._broken.get(key) == fp:
+                continue
+            if self._pending.get(key) != fp:
+                self._pending[key] = fp  # first sighting of this state: look again next pass
+                continue
+            del self._pending[key]
+            try:
+                bundle = read_bundle(folder)
+                prediction = self._predict_blind(bundle)  # before it joins the data (ghost.md 7.1)
+                graph.ingest(self.driver, bundle, fp)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("could not ingest %s", folder)
+                self._broken[key] = fp
+                self.failed.emit(key, str(exc))
+                continue
+            try:
+                blind.record(self.driver, bundle, prediction)
+            except Exception:  # noqa: BLE001 - a failed test must never lose the run
+                log.exception("blind test of %s failed", bundle.bundle_id)
+            self._known[key] = fp
+            log.info("ingested %s", bundle.bundle_id)
+            self.ingested.emit(bundle.bundle_id, graph.title_of(bundle))
