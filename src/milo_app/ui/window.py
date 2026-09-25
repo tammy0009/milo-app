@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from milo_app import graph, predict, services
 from milo_app.config import ASSETS, get_settings
 from milo_app.ui import theme
+from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
 from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows
 from milo_app.ui.format import elapsed, pretty_name, quantity, shown_value, sig, size_text, test_summary
@@ -339,6 +340,7 @@ class MainWindow(QMainWindow):
         self.descriptors = DescriptorPanel()
         self.descriptors.changed.connect(lambda _keys: self.redraw())
         self.descriptors.sims_changed.connect(self.redraw)
+        self.descriptors.recolored.connect(self._recolored)
 
         self.types = TypeBar()
         self.types.changed.connect(self.redraw)
@@ -372,6 +374,7 @@ class MainWindow(QMainWindow):
         split.setChildrenCollapsible(False)
 
         self.formulas = FormulaView()
+        self.formulas.recolored.connect(self._recolored)
         self.pages = QStackedWidget()
         self.pages.addWidget(split)
         self.pages.addWidget(self.formulas)
@@ -499,6 +502,14 @@ class MainWindow(QMainWindow):
         self.types.set_counts(counts)
         shown = self.types.shown
         self.canvas.set_graph([n for n in nodes if n["kind"] in shown], links)
+        # a spinning ring around each campaign's runs on screen, in the campaign's color
+        rings: dict[str, list[str]] = {}
+        for s in sims:
+            name = graph.campaign_of(s)
+            if name and s["bundle_id"] in shown_sims:
+                rings.setdefault(name, []).append(s["bundle_id"])
+        self.canvas.set_campaigns([{"name": n, "color": campaign_color(n), "sims": ids} for n, ids in rings.items()]
+                                  if "sim" in shown else [])
         hints = []
         if "descriptor" in shown and not self.descriptors.active:
             hints.append("No descriptors checked: check fields in the list on the left")
@@ -510,6 +521,12 @@ class MainWindow(QMainWindow):
             hints.append("Every kind of node is switched off: turn some on in the Show bar")
         self.canvas.set_hint("   ·   ".join(hints))
         self.status.setText(f"{sum(counts[k] for k in shown)} nodes shown")
+
+    def _recolored(self) -> None:
+        """A campaign got a new color in one panel: show it in the other and on its ring."""
+        self.descriptors.refresh_colors()
+        self.formulas.refresh_colors()
+        self.redraw()
 
     def _descriptor_nodes(self, key: str, color: str, shown_sims: set[str]) -> list[tuple[dict, list[str]]]:
         """One node per value of the group as it reads on screen ("Density = 1 g/cm^3"), each with

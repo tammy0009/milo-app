@@ -9,9 +9,10 @@ Each number carries its ± uncertainty, next to how well the line fits, how sure
 (from the relationship nodes), and, with one explaining descriptor, a chart of the runs, the line and
 its 90 % band. A small calculator turns values of the explaining descriptors into a guess.
 
-The campaign picker at the top narrows all of it to one campaign's runs (or the runs in no
-campaign): the stored math is over every run and stays as it is; this works it out again over just
-those runs, so a campaign can be looked at on its own.
+Campaigns, at the top of the side panel, are the same dropdowns as on the graph (campaigns.py), and
+say which runs this page uses. Checking a campaign keeps just its runs (a run can still be switched on
+or off on its own). The stored math is over every run and stays as it is; with only some runs on, it
+is worked out again over just those, so a campaign can be looked at on its own.
 The formula is predict.formula(): the same Bayesian linear regression as the models (ghost.md 4.1).
 """
 from __future__ import annotations
@@ -20,34 +21,29 @@ import math
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSplitter,
-    QSizePolicy, QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QSizePolicy, QStyleOptionViewItem, QToolTip, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator,
+    QVBoxLayout, QWidget,
 )
 
 from milo_app import predict
 from milo_app.graph import campaign_of
+from milo_app.ui.campaigns import CampaignList
 from milo_app.ui import latex, prefs, theme
-from milo_app.ui.format import landed, pretty_name, prior_text, sig, units_text
+from milo_app.ui.format import pretty_name, prior_text, sig, units_text
 
 KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 SECTIONS = (("bundle", "Bundle"), ("input", "Inputs"), ("output", "Outputs"))
 C = theme.CHART
 
 
-ALL_RUNS = "*"  # the campaign picker's "All runs"
-NO_CAMPAIGN = ""  # its "None": the runs in no campaign
-
-
-def run_campaign(sim: dict[str, Any]) -> str | None:
-    """The campaign of a run in graph.descriptor_table(), or None."""
-    return campaign_of({"campaign": sim["values"].get("bundle:campaign", (None,))[0]})
-
-
-def run_landed(sim: dict[str, Any]) -> str:
-    return landed({k: sim["values"].get(f"bundle:{k}", (None,))[0] for k in ("finish", "start")})
+def as_sim(row: dict[str, Any]) -> dict[str, Any]:
+    """A run of graph.descriptor_table() in the shape the campaign dropdowns read."""
+    field = {k: row["values"].get(f"bundle:{k}", (None,))[0] for k in ("campaign", "finish", "start")}
+    return {"bundle_id": row["id"], "title": row.get("title")} | field
 
 
 def name(key: str) -> str:
@@ -148,11 +144,13 @@ class FitChart(QWidget):
 
 
 class FormulaView(QWidget):
+    recolored = Signal()  # a campaign got a new color here
+
     def __init__(self) -> None:
         super().__init__()
         self.all_table: list[dict[str, Any]] = []  # every run
         self.all_relationships: list[dict[str, Any]] = []  # the stored ones, over every run
-        self.table: list[dict[str, Any]] = []  # the runs in the chosen campaign (or every run)
+        self.table: list[dict[str, Any]] = []  # the runs switched on in Campaigns
         self.relationships: list[dict[str, Any]] = []
         self.tests: list[dict[str, Any]] = []
         self.titles: dict[str, str] = {}
@@ -177,15 +175,27 @@ class FormulaView(QWidget):
             self.tree.addTopLevelItem(item)
             item.setExpanded(source == "output")
             self.sections[source] = item
-        # which runs the math uses: every run, one campaign, or the runs in no campaign
-        self.scope = QComboBox()
-        self.scope.setToolTip("Work out the formulas and relationships from only these runs")
-        self.scope.currentIndexChanged.connect(lambda _i: self._apply_scope())
+        # which runs the math uses: the same Campaigns dropdowns as the graph's, at the very top
+        self.runs_tree = QTreeWidget()
+        self.runs_tree.setHeaderHidden(True)
+        self.runs_tree.setIndentation(12)
+        self.runs_tree.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
+        self.runs_tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # no focus frame round the rows
+        section = QTreeWidgetItem(["Campaigns"])
+        section.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        section.setFont(0, theme.font(theme.SIZES["small"], bold=True))
+        self.runs_tree.addTopLevelItem(section)
+        section.setExpanded(True)
+        self.campaigns = CampaignList(self.runs_tree, section, "formula_hidden_runs", isolate=True)
+        self.campaigns.changed.connect(self._apply_scope)
+        self.campaigns.recolored.connect(self.recolored)
+        self.runs_tree.itemChanged.connect(lambda item, _c: self.campaigns.handle(item))
+        self.runs_tree.itemExpanded.connect(lambda _i: self._fit_runs_tree())
+        self.runs_tree.itemCollapsed.connect(lambda _i: self._fit_runs_tree())
         box = QVBoxLayout(side)
         box.setContentsMargins(14, 14, 8, 10)
         box.setSpacing(8)
-        box.addWidget(QLabel("CAMPAIGN", objectName="PanelTitle"))
-        box.addWidget(self.scope)
+        box.addWidget(self.runs_tree)
         box.addSpacing(6)
         box.addWidget(QLabel("DESCRIPTORS WITH NUMBERS", objectName="PanelTitle"))
         box.addWidget(self.filter)
@@ -279,43 +289,43 @@ class FormulaView(QWidget):
     # ---- data
 
     def set_data(self, table: list[dict[str, Any]], relationships: list[dict[str, Any]], titles: dict[str, str]) -> None:
-        """Called whenever the graph changes; keeps the campaign and what is checked."""
+        """Called whenever the graph changes; keeps which runs are on and what is checked."""
         self.all_table, self.all_relationships, self.titles = table, relationships, titles
-        self._fill_scopes()
+        self.campaigns.fill([as_sim(row) for row in table])
+        self._fit_runs_tree()
         self._apply_scope()
 
-    def _fill_scopes(self) -> None:
-        """Every run, then each campaign newest first (by its latest run), then the runs in no campaign."""
-        current = self.scope.currentData() if self.scope.count() else self.store.value("formula_campaign", ALL_RUNS)
-        latest: dict[str | None, str] = {}
-        counts: dict[str | None, int] = {}
-        for sim in self.all_table:
-            c = run_campaign(sim)
-            latest[c] = max(latest.get(c, ""), run_landed(sim))
-            counts[c] = counts.get(c, 0) + 1
-        self.scope.blockSignals(True)
-        self.scope.clear()
-        self.scope.addItem(f"All runs · {len(self.all_table)}", ALL_RUNS)
-        for c in sorted((c for c in latest if c is not None), key=latest.get, reverse=True):
-            self.scope.addItem(f"{c} · {counts[c]}", c)
-        if None in latest:
-            self.scope.addItem(f"None (no campaign) · {counts[None]}", NO_CAMPAIGN)
-        found = self.scope.findData(current)
-        self.scope.setCurrentIndex(found if found >= 0 else 0)
-        self.scope.blockSignals(False)
+    def refresh_colors(self) -> None:
+        self.campaigns.refresh_colors()
+
+    def _fit_runs_tree(self) -> None:
+        """The Campaigns list is as tall as what is open in it, up to half the panel."""
+        tree, total = self.runs_tree, 4
+        it = QTreeWidgetItemIterator(tree)
+        while it.value():
+            item, parent = it.value(), it.value().parent()
+            visible = not item.isHidden()
+            while visible and parent is not None:
+                visible = parent.isExpanded()
+                parent = parent.parent()
+            if visible:
+                option = QStyleOptionViewItem()
+                index = tree.indexFromItem(item)
+                tree.itemDelegate().initStyleOption(option, index)
+                total += tree.itemDelegate().sizeHint(option, index).height() + 6  # the stylesheet's padding
+            it += 1
+        room = max(120, (self.height() or 800) // 2)
+        tree.setFixedHeight(min(total, room))
 
     def _apply_scope(self) -> None:
-        """Use only the chosen campaign's runs for everything on this page: the descriptors listed, the
-        formula and its chart, the relationships (worked out again over just those runs), and the
-        track record."""
-        scope = self.scope.currentData()
-        if scope is None:
-            return
-        self.store.setValue("formula_campaign", scope)
-        if scope == ALL_RUNS:
+        """Use only the runs switched on in Campaigns for everything on this page: the descriptors listed,
+        the formula and its chart, the relationships (worked out again over just those runs when not all
+        are on), and the track record."""
+        on = set(self.campaigns.shown())
+        if on == {row["id"] for row in self.all_table}:
             self.table, self.relationships = self.all_table, self.all_relationships
         else:
-            self.table = [s for s in self.all_table if (run_campaign(s) or NO_CAMPAIGN) == scope]
+            self.table = [row for row in self.all_table if row["id"] in on]
             self.relationships = predict.relationships_in(self.table)
         catalog = predict.formula_catalog(self.table)
         self.checked = [k for k in self.checked if any(e["key"] == k for e in catalog)]
@@ -336,9 +346,16 @@ class FormulaView(QWidget):
         self._recompute()
 
     def _scope_words(self) -> str:
-        """How the chosen runs read in a sentence: "", " in PLA/PCL sweep", " in no campaign"."""
-        scope = self.scope.currentData()
-        return "" if scope in (None, ALL_RUNS) else " in no campaign" if scope == NO_CAMPAIGN else f" in {scope}"
+        """How the runs switched on read in a sentence: "" (every run), " in PLA-PCL water uptake",
+        " in no campaign", or " among the 3 runs switched on"."""
+        on = {row["id"] for row in self.table}
+        if on == {row["id"] for row in self.all_table}:
+            return ""
+        for row in self.all_table:
+            campaign = campaign_of({"campaign": row["values"].get("bundle:campaign", (None,))[0]}) or ""
+            if on == set(self.campaigns.campaign_runs(campaign)):
+                return f" in {campaign}" if campaign else " in no campaign"
+        return f" among the {len(on)} run{'s' if len(on) != 1 else ''} switched on"
 
     def set_track(self, tests: list[dict[str, Any]]) -> None:
         self.tests = tests

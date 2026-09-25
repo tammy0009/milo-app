@@ -82,6 +82,13 @@ GRAPH = {
     "ghost_ink": "#6b6b6b",
     "ghost_opacity": 0.85,
     "dim": 0.12,               # opacity of nodes a search does not match
+    # campaign rings: a dotted ring in the campaign's color around its runs, turning slowly
+    "ring_margin": 58,         # px past the farthest run's centre (its circle and its label)
+    "ring_width": 2.4,
+    "ring_gap": 3.2,           # space between dots, in pen widths
+    "ring_grab": 9,            # px either side of the ring that grab it
+    "ring_ms": 40,             # frame time of the spin
+    "ring_speed": 0.12,        # how far the dots travel each frame, in pen widths
 }
 
 # The formula chart in the Ghosts tab: the runs as dots, the fitted line, its 90 % band.

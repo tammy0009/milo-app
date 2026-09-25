@@ -10,6 +10,9 @@ toward its simulations, and a light pull keeps everything near the middle. It ru
 seconds after anything changes and then rests. Drag a node to move it, drag the background to
 pan, wheel to zoom. Clicking a node selects it and a little arrow fades in where you clicked (kept
 inside the node), then fades away. Double-clicking anywhere on a node opens the side panel.
+
+A campaign with runs on screen gets a slowly spinning dotted ring around them, in its color. Grab the
+ring to move all of the campaign's runs at once.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from PySide6.QtCore import (
     QEasingCurve, QLineF, QParallelAnimationGroup, QPoint, QPointF, QPropertyAnimation, QRectF,
     QSequentialAnimationGroup, Qt, QTimer, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPainterPath, QPainterPathStroker, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsObject, QGraphicsScene, QGraphicsView, QLabel,
 )
@@ -76,6 +79,9 @@ class Node(QGraphicsObject):
                 edge.adjust()
             if self.held:
                 self.canvas.reheat(0.3)
+                for ring in self.canvas.rings.values():
+                    if self in ring.sims:
+                        ring.fit()
         return super().itemChange(change, value)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -354,6 +360,89 @@ class Edge(QGraphicsLineItem):
                 node.edges.remove(self)
 
 
+class CampaignRing(QGraphicsObject):
+    """A dotted ring around a campaign's runs on screen, in the campaign's color, turning slowly. Only
+    the ring itself takes the mouse (a band along it): grab it to move every run of the campaign at
+    once; inside it, nodes and the background work as usual."""
+
+    def __init__(self, name: str, color: str, sims: list["SimNode"], canvas: "GraphView") -> None:
+        super().__init__()
+        self.name, self.sims, self.canvas = name, sims, canvas
+        self.color = QColor(color)
+        self.radius = 0.0
+        self.turn = 0.0  # how far the dots have travelled round
+        self._grab: QPointF | None = None
+        self.setZValue(-1)  # under links and nodes
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip(f"{name}\nDrag the ring to move its runs together")
+        self.fit()
+
+    def fit(self) -> None:
+        """Centre on the runs and reach just past the farthest one (and its label)."""
+        if not self.sims:
+            return
+        xs = [s.x() for s in self.sims]
+        ys = [s.y() for s in self.sims]
+        center = QPointF((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+        reach = max(math.hypot(s.x() - center.x(), s.y() - center.y()) for s in self.sims)
+        radius = reach + G["ring_margin"]
+        if radius != self.radius:
+            self.prepareGeometryChange()
+            self.radius = radius
+        self.setPos(center)
+
+    def spin(self, step: float) -> None:
+        self.turn = (self.turn + step) % 1000.0
+        self.update()
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        r = self.radius + G["ring_grab"]
+        return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def shape(self) -> QPainterPath:  # the band along the ring, not the disc inside it
+        circle = QPainterPath()
+        circle.addEllipse(QPointF(0, 0), self.radius, self.radius)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(2 * G["ring_grab"])
+        return stroker.createStroke(circle)
+
+    def paint(self, painter: QPainter, _option, _widget=None) -> None:
+        pen = QPen(self.color, G["ring_width"])
+        pen.setStyle(Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([1.0, G["ring_gap"]])
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setDashOffset(-self.turn)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(0, 0), self.radius, self.radius)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+        self._grab = event.scenePos()
+        for sim in self.sims:
+            sim.held = True
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._grab is None:
+            return
+        delta = event.scenePos() - self._grab
+        self._grab = event.scenePos()
+        for sim in self.sims:
+            sim.setPos(sim.pos() + delta)
+        self.fit()
+        self.canvas.reheat(0.3)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._grab = None
+        for sim in self.sims:
+            sim.held = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.canvas.reheat(0.3)
+
+
 # ---------------------------------------------------------------------------- canvas
 
 
@@ -381,6 +470,10 @@ class GraphView(QGraphicsView):
 
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
+        self.rings: dict[str, CampaignRing] = {}
+        self.spinner = QTimer(self)  # turns the campaign rings
+        self.spinner.setInterval(G["ring_ms"])
+        self.spinner.timeout.connect(self._spin)
         self.search = ""
         self.alpha = 0.0
         self._fit_pending = True
@@ -434,6 +527,26 @@ class GraphView(QGraphicsView):
                 self.edges.append(edge)
         self._apply_emphasis()
         self.reheat(1.0)
+
+    def set_campaigns(self, campaigns: list[dict[str, Any]]) -> None:
+        """A ring for each campaign with runs on screen: [{"name", "color", "sims": [bundle ids]}]."""
+        for ring in self.rings.values():
+            self.graph_scene.removeItem(ring)
+        self.rings = {}
+        for campaign in campaigns:
+            sims = [self.nodes[s] for s in campaign["sims"] if isinstance(self.nodes.get(s), SimNode)]
+            if sims:
+                ring = CampaignRing(campaign["name"], campaign["color"], sims, self)
+                self.graph_scene.addItem(ring)
+                self.rings[campaign["name"]] = ring
+        if self.rings and not self.spinner.isActive():
+            self.spinner.start()
+        elif not self.rings:
+            self.spinner.stop()
+
+    def _spin(self) -> None:
+        for ring in self.rings.values():
+            ring.spin(G["ring_speed"])
 
     def open_node(self, node: Node) -> None:
         self.node_opened.emit(node.data_)
@@ -571,6 +684,8 @@ class GraphView(QGraphicsView):
             if step > MAX_STEP:
                 node.vx, node.vy = node.vx * MAX_STEP / step, node.vy * MAX_STEP / step
             node.setPos(xs[i] + node.vx, ys[i] + node.vy)
+        for ring in self.rings.values():
+            ring.fit()
 
         self.alpha *= COOLING
         if self._fit_pending and self.alpha < 0.25:
@@ -582,7 +697,7 @@ class GraphView(QGraphicsView):
     def fit(self) -> None:
         if not self.nodes:
             return
-        rect = self.graph_scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        rect = self.graph_scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)  # rings included
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
         if self.transform().m11() > 1.4:  # never blow a small graph up past 140 %
             self.resetTransform()
