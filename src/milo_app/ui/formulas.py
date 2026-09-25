@@ -291,6 +291,7 @@ class FormulaView(QWidget):
         self.math = QPushButton("Show the math", objectName="Chip", checkable=True)
         self.math.toggled.connect(self._toggle_math)
         self.math_box = QWidget()
+        self.math_box.setMaximumWidth(theme.SIZES["math_width"])  # tables stay tables on a wide page
         self.math_layout = QVBoxLayout(self.math_box)  # sections and tables, as in the graph's panels
         self.math_layout.setContentsMargins(0, 0, 0, 0)
         self.math_layout.setSpacing(6)

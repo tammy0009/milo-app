@@ -52,6 +52,7 @@ SIZES = {
     "drawer_ms": 240,  # how long it takes to slide
     "sure_big": 34,    # a ghost's or relationship's confidence, at the top of its panel
     "tile_value": 26,  # the big number on a Ghosts tab tile
+    "math_width": 640,  # widest the Ghosts tab's "Show the math" gets
     "headline": 15,    # what it changes / says, under that
     "confidence_bar": 6,
 }

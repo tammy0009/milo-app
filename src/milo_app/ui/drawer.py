@@ -191,6 +191,7 @@ class NodeInfo(QWidget):
         self.headline_label.setText(summary.get("headline_label", ""))
         self.headline.setText(summary.get("headline", ""))
         self.headline_label.setVisible(bool(summary.get("headline_label")))
+        self.headline.setVisible(bool(summary.get("headline")))
         rows = summary.get("changes") or []
         self.changes_label.setText(summary.get("changes_label", "") if rows else "")
         self.changes_label.setVisible(bool(rows))
@@ -653,6 +654,21 @@ def link_confidence(relationships: list[dict[str, Any]], a_keys: list[str], b: s
     return None
 
 
+LIST_FIELDS = ("predictors", "slopes", "slope_sd", "x_lo", "x_hi", "left_out", "sims", "observed", "fitted", "aliases")
+
+
+def read_model(m: dict[str, Any]) -> dict[str, Any]:
+    """A model as the graph gives it back, made plain: an empty list comes back as the text "[]" and a
+    missing unit as "null" (the graph keeps what it cannot store as JSON text)."""
+    m = dict(m)
+    for key in LIST_FIELDS:
+        m[key] = loads(m.get(key), [])
+    m["counts"] = loads(m.get("counts"), {})
+    if m.get("units") in ("null", ""):
+        m["units"] = None
+    return m
+
+
 def _main_model(models: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     return max(models, key=lambda m: m.get("n") or 0) if models else None
 
@@ -662,8 +678,10 @@ def descriptor_summary(data: dict[str, Any], models: list[dict[str, Any]] | None
     """A descriptor value: what it is and how many runs have it; how well MILO can predict the field
     (R² for one that changes, the rule of succession for one that does not); what moves it."""
     runs = len(data.get("sims") or [])
-    summary: dict[str, Any] = {"headline_label": "THIS VALUE", "headline": data["label"],
-                               "more": f"{runs} run{'s' if runs != 1 else ''} {'have' if runs != 1 else 'has'} it"}
+    # the title already says the value: the summary leads with how well it can be predicted
+    summary: dict[str, Any] = {"headline_label": "", "headline": "",
+                               "more": f"{runs} run{'s' if runs != 1 else ''} {'have' if runs != 1 else 'has'} this value"}
+    models = [read_model(x) for x in models or []]
     m = _main_model(models)
     if m is None:
         return summary | {"confidence": None, "confidence_note": "MILO does not model this field (text or lists)"}
@@ -698,7 +716,8 @@ def descriptor_math(data: dict[str, Any], models: list[dict[str, Any]] | None,
         ("Field", _field(data["group"])),
         ("From", {"bundle": "bundle.json", "input": "Inputs", "output": "Outputs"}.get(data["group"].partition(":")[0], "")),
         ("Exactly" if len(data["exact"]) == 1 else "Exactly, one of", "\n".join(data["exact"]))]}]
-    for m in sorted(models or [], key=lambda m: -(m.get("n") or 0)):
+    models = [read_model(x) for x in models or []]
+    for m in sorted(models, key=lambda m: -(m.get("n") or 0)):
         title = "HOW MILO GUESSES IT" + (f"  ·  RUNS VARYING {m['family'].upper()}" if len(models) > 1 and m.get("family") else "")
         aliases = [a for a in (m.get("aliases") or []) if a != m.get("descriptor")]
         if m.get("method") == "rule of succession":
