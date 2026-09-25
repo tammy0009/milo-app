@@ -313,7 +313,8 @@ def formula(table: list[dict[str, Any]], target: str, predictors: list[str]) -> 
 
     y = at(target)
     if np.ptp(y) == 0:
-        return {"error": f"{pretty_name(target.partition(':')[2])} is the same in every run: nothing to explain"}
+        runs = "both runs" if len(rows) == 2 else f"all {len(rows)} runs"
+        return {"error": f"{pretty_name(target.partition(':')[2])} is the same in {runs} that have all of these: nothing to explain"}
     x_raw = np.column_stack([at(k) for k in predictors])
     return _regress(y, x_raw, predictors) | {
         "target": target, "n": len(rows), "sims": [table[i]["id"] for i in rows],
