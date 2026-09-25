@@ -28,14 +28,15 @@ COLORS = {
 }
 
 FONT_FILES = ("alte-haas-grotesk-regular.ttf", "alte-haas-grotesk-bold.ttf")
+WORDMARK_FONT_FILE = "cs_regular.ttf"
 FONT_FALLBACK = "Segoe UI"  # used if the font files above are missing
 
 SIZES = {
     "base": 13,        # px, body text
     "small": 11,
     "title": 18,       # title in the side panel
-    "wordmark": 18,    # MILO in the top bar
-    "splash": 44,      # MILO on the starting screen
+    "wordmark": 30,    # Counter-Strike has a short cap height; this reads like 18 px body text
+    "splash": 80,      # MILO on the starting screen
     "radius": 6,
     "pad": 12,
     "latex": 15,       # pt, the typeset formula in the Ghosts tab, written with names
@@ -180,15 +181,25 @@ QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 
 
 _family = FONT_FALLBACK
+_wordmark_family = FONT_FALLBACK
+
+
+def _quality_font(f: QFont) -> QFont:
+    f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
+    return f
 
 
 def apply(app: QApplication) -> None:
-    global _family
+    global _family, _wordmark_family
     for name in FONT_FILES:
         font_id = QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / name))
         if font_id >= 0:
             _family = QFontDatabase.applicationFontFamilies(font_id)[0]
-    font = QFont(_family)
+    _wordmark_family = _family
+    wordmark_id = QFontDatabase.addApplicationFont(str(ASSETS / "fonts" / WORDMARK_FONT_FILE))
+    if wordmark_id >= 0:
+        _wordmark_family = QFontDatabase.applicationFontFamilies(wordmark_id)[0]
+    font = _quality_font(QFont(_family))
     font.setPixelSize(SIZES["base"])
     app.setFont(font)  # the base font; stylesheet rules below only change sizes where they say so
     app.setStyle("Fusion")  # a neutral base the stylesheet fully controls
@@ -202,7 +213,7 @@ WORDMARKS = {"wordmark": 5, "splash": 14}
 
 
 def font(px: int, bold: bool = False) -> QFont:
-    f = QFont(_family)
+    f = _quality_font(QFont(_family))
     f.setPixelSize(px)
     f.setBold(bold)
     # Hinting snaps letters to the pixel grid at 100 %; on the zoomable graph that grid no longer
@@ -212,8 +223,8 @@ def font(px: int, bold: bool = False) -> QFont:
 
 
 def wordmark_font(key: str) -> QFont:
-    font = QFont(_family)
+    font = _quality_font(QFont(_wordmark_family))
     font.setPixelSize(SIZES[key])
-    font.setBold(True)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, WORDMARKS[key])
     return font

@@ -66,7 +66,7 @@ class FitChart(QWidget):
         if not fit:
             return
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         key = fit["predictors"][0]
         xs = np.array(fit["inputs"][key])
         ys = np.array(fit["observed"])

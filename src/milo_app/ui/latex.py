@@ -140,8 +140,9 @@ def render(fit: dict[str, Any], pixel_ratio: float = 1.0, symbolic: bool = False
     text = "\n".join(f"${line}$" for line in lines(fit, symbolic))
     size = theme.SIZES["latex_symbols" if symbolic else "latex"]
     pixmap = math_image(text, size, pixel_ratio)
-    if max_width and pixmap.width() / pixel_ratio > max_width:
-        pixmap = math_image(text, size * max_width / (pixmap.width() / pixel_ratio) * 0.97, pixel_ratio)
+    logical_width = pixmap.width() / pixmap.devicePixelRatioF()
+    if max_width and logical_width > max_width:
+        pixmap = math_image(text, size * max_width / logical_width * 0.97, pixel_ratio)
     return pixmap
 
 
@@ -150,9 +151,10 @@ def math_image(text: str, size: float, pixel_ratio: float = 1.0) -> QPixmap:
     figure = Figure(figsize=(0.01, 0.01))
     figure.text(0, 0, text, fontsize=size, color=theme.COLORS["ink"], linespacing=1.6)
     buffer = io.BytesIO()
-    figure.savefig(buffer, format="png", dpi=100 * pixel_ratio, bbox_inches="tight", pad_inches=0.04,
+    # Supersample the rasterized math so it remains smooth at native and fractional display scales.
+    figure.savefig(buffer, format="png", dpi=200 * pixel_ratio, bbox_inches="tight", pad_inches=0.04,
                    transparent=True)
     pixmap = QPixmap()
     pixmap.loadFromData(buffer.getvalue(), "PNG")
-    pixmap.setDevicePixelRatio(pixel_ratio)
+    pixmap.setDevicePixelRatio(2 * pixel_ratio)
     return pixmap

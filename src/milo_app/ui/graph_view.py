@@ -370,7 +370,8 @@ class GraphView(QGraphicsView):
         self.graph_scene.setBackgroundBrush(QBrush(QColor(G["canvas"])))
         self.graph_scene.selectionChanged.connect(self._on_selection)
         self.setScene(self.graph_scene)
-        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+                            | QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
