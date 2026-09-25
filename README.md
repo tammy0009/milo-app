@@ -125,6 +125,8 @@ Under the fields, the runs, each with a check box: uncheck a run to take it and 
 graph; new runs arrive checked.
 - **Campaigns**: one dropdown per campaign, newest first (the one with the latest run on top), its
   runs inside. The campaign's own box shows or hides all of them. Runs in no campaign are under **None**.
+  Click the dot next to a campaign's name to pick its color. On the graph, a slowly spinning dotted
+  ring in that color surrounds the campaign's runs; drag the ring to move them all at once.
 - **Sim Feed**: every run, newest first, by title and the time it landed (its finish time).
 A run's box in Campaigns and in the Sim Feed is the same switch.
 A relationship pulls in its two descriptors even if they are not checked (in grey). What you
