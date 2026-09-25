@@ -177,6 +177,8 @@ QLabel#SureBig {{ font-size: {sure_big}px; font-weight: bold; }}
 QLabel#Headline {{ font-size: {headline}px; font-weight: bold; }}
 QLabel#ChangeValue {{ color: {ink}; }}
 QLabel#ChangeSure {{ font-size: {small}px; font-weight: bold; }}
+QLabel#TableCell {{ font-size: {small}px; }}
+QLabel#TableGroup {{ font-size: {small}px; font-weight: bold; padding-top: 6px; }}
 QLabel#Problems {{ color: {warn}; font-size: {small}px; }}
 QLabel#RunError {{ background: {fail_soft}; color: {fail}; border-radius: {radius}px; padding: 8px 10px;
                    font-size: {small}px; }}

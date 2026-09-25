@@ -31,7 +31,9 @@ from milo_app.config import ASSETS, get_settings
 from milo_app.ui import prefs, theme
 from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
-from milo_app.ui.drawer import Drawer, NodeInfo, loads, node_rows, prediction_summary, relationship_summary
+from milo_app.ui.drawer import (
+    Drawer, NodeInfo, loads, node_rows, prediction_math, prediction_summary, relationship_math, relationship_summary,
+)
 from milo_app.ui.format import (
     elapsed, ghost_title, pretty_name, quantity, short_title, shown_value, sig, size_text, test_summary,
 )
@@ -640,7 +642,10 @@ class MainWindow(QMainWindow):
                 summary["isolate"] = {"campaign": campaign, "on": campaign in self.isolated}
         elif kind == "relationship":
             summary = relationship_summary(data["rel"])
-        self.info.show_node(kind, titles[kind](), node_rows(data, models, self._titles), sims, summary)
+        math = {"prediction": lambda: prediction_math(data["pred"], self._titles),
+                "relationship": lambda: relationship_math(data["rel"], self._titles)}.get(
+            kind, lambda: node_rows(data, models, self._titles))()
+        self.info.show_node(kind, titles[kind](), math, sims, summary)
         self.drawer.show_page(1)
         self._keep_in_view(data["id"])
 
