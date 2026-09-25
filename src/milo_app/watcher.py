@@ -12,6 +12,7 @@ still being copied in from the VM is never read half-way.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -25,10 +26,16 @@ log = logging.getLogger(__name__)
 
 
 def fingerprint(folder: Path) -> str:
+    """Files, total size and newest change under `folder`. os.walk + os.stat rather than pathlib: the same
+    answer at a fraction of the Python work (this runs over every file every few seconds). Each file is
+    stat'ed itself, not read from the folder listing, whose sizes can lag while a file is being written."""
     count = size = newest = 0
-    for path in folder.rglob("*"):
-        if path.is_file():
-            st = path.stat()
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            path = os.path.join(root, name)
+            if not os.path.isfile(path):
+                continue
+            st = os.stat(path)
             count, size, newest = count + 1, size + st.st_size, max(newest, st.st_mtime_ns)
     return f"{count}:{size}:{newest}"
 

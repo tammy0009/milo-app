@@ -27,7 +27,9 @@ from PySide6.QtCore import (
     QEasingCurve, QLineF, QParallelAnimationGroup, QPoint, QPointF, QPropertyAnimation, QRectF,
     QSequentialAnimationGroup, Qt, QTimer, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPainterPath, QPainterPathStroker, QPen, QPolygonF
+from PySide6.QtGui import (
+    QBrush, QColor, QFontMetrics, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmapCache, QPolygonF,
+)
 from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsObject, QGraphicsScene, QGraphicsView, QLabel,
 )
@@ -54,6 +56,9 @@ class Node(QGraphicsObject):
                       | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setZValue(1)
+        # Drawn once into an image at the current zoom and copied from then on, so moving, dragging
+        # and panning never redraw a dashed circle or a label (set_data and zooming redraw it).
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.handle = OpenHandle(self)
 
     def handle_spot(self, click: QPointF) -> QPointF:
@@ -503,6 +508,7 @@ class GraphView(QGraphicsView):
         # No spatial index: during a settle every node and link moves each tick, and re-sorting an
         # index of thousands of items every time costs far more than it saves on clicks.
         self.graph_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+        QPixmapCache.setCacheLimit(256 * 1024)  # KB: room for every node's cached image (Qt's default is 10 MB)
         self.graph_scene.setBackgroundBrush(QBrush(QColor(G["canvas"])))
         self.graph_scene.selectionChanged.connect(self._on_selection)
         self.setScene(self.graph_scene)
