@@ -21,6 +21,8 @@ import math
 import random
 from typing import Any
 
+import numpy as np
+
 from PySide6.QtCore import (
     QEasingCurve, QLineF, QParallelAnimationGroup, QPoint, QPointF, QPropertyAnimation, QRectF,
     QSequentialAnimationGroup, Qt, QTimer, Signal,
@@ -30,22 +32,11 @@ from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsLineItem, QGraphicsObject, QGraphicsScene, QGraphicsView, QLabel,
 )
 
-from milo_app.ui import theme
+from milo_app.ui import layout, theme
 from milo_app.ui.format import elapsed, ghost_change, short_title
 
 G = theme.GRAPH
 
-# Force layout. Forces are scaled by `alpha`, which cools each tick; the layout rests below ALPHA_MIN.
-REPULSION = 42000.0
-SPRING = 0.035
-SPRING_LENGTH = 170.0
-GRAVITY = 0.004
-CAMPAIGN_PULL = 0.02  # toward the middle of a campaign's runs and ghosts
-DAMPING = 0.82
-MAX_STEP = 30.0
-COOLING = 0.985
-ALPHA_MIN = 0.01
-TICK_MS = 16
 
 
 # ---------------------------------------------------------------------------- items
@@ -529,7 +520,7 @@ class GraphView(QGraphicsView):
         self.alpha = 0.0
         self._fit_pending = True
         self.timer = QTimer(self)
-        self.timer.setInterval(TICK_MS)
+        self.timer.setInterval(layout.TICK_MS)
         self.timer.timeout.connect(self._tick)
 
         self.hint = QLabel(self, objectName="GraphHint", alignment=Qt.AlignmentFlag.AlignCenter)
@@ -708,65 +699,26 @@ class GraphView(QGraphicsView):
     def _tick(self) -> None:
         nodes = list(self.nodes.values())
         n = len(nodes)
-        if n == 0 or self.alpha < ALPHA_MIN:
+        if n == 0 or self.alpha < layout.ALPHA_MIN:
             self.timer.stop()
             return
         index = {node.key: i for i, node in enumerate(nodes)}
-        xs = [node.x() for node in nodes]
-        ys = [node.y() for node in nodes]
-        fx, fy = [0.0] * n, [0.0] * n
-        a = self.alpha
-
-        for i in range(n):
-            xi, yi = xs[i], ys[i]
-            for j in range(i + 1, n):
-                dx, dy = xi - xs[j], yi - ys[j]
-                d2 = dx * dx + dy * dy
-                if d2 > 1_440_000:  # beyond 1200 px the push is negligible
-                    continue
-                if d2 < 1.0:
-                    dx, dy, d2 = random.uniform(-1, 1), random.uniform(-1, 1), 1.0
-                d = math.sqrt(d2)
-                f = REPULSION / d2
-                px, py = f * dx / d, f * dy / d
-                fx[i] += px
-                fy[i] += py
-                fx[j] -= px
-                fy[j] -= py
-        # each campaign's runs and ghosts are pulled gently together, so its ring stays tight
-        for ring in self.rings.values():
-            members = [index[m.key] for m in ring.sims if m.key in index]
-            if len(members) > 1:
-                cx = sum(xs[i] for i in members) / len(members)
-                cy = sum(ys[i] for i in members) / len(members)
-                for i in members:
-                    fx[i] += CAMPAIGN_PULL * (cx - xs[i])
-                    fy[i] += CAMPAIGN_PULL * (cy - ys[i])
-        for edge in self.edges:
-            i, j = index[edge.a.key], index[edge.b.key]
-            dx, dy = xs[j] - xs[i], ys[j] - ys[i]
-            d = math.hypot(dx, dy) or 1.0
-            f = SPRING * (d - SPRING_LENGTH)
-            px, py = f * dx / d, f * dy / d
-            fx[i] += px
-            fy[i] += py
-            fx[j] -= px
-            fy[j] -= py
-
+        x = np.array([node.x() for node in nodes])
+        y = np.array([node.y() for node in nodes])
+        vx = np.array([node.vx for node in nodes])
+        vy = np.array([node.vy for node in nodes])
+        held = np.array([node.held for node in nodes])
+        edges = np.array([(index[e.a.key], index[e.b.key]) for e in self.edges], dtype=int).reshape(-1, 2)
+        groups = [np.array([index[m.key] for m in ring.sims if m.key in index], dtype=int) for ring in self.rings.values()]
+        x, y, vx, vy = layout.step(x, y, vx, vy, held, edges, groups, self.alpha)
         for i, node in enumerate(nodes):
-            if node.held:
-                node.vx = node.vy = 0.0
-                continue
-            node.vx = (node.vx + a * (fx[i] - GRAVITY * xs[i])) * DAMPING
-            node.vy = (node.vy + a * (fy[i] - GRAVITY * ys[i])) * DAMPING
-            step = math.hypot(node.vx, node.vy)
-            if step > MAX_STEP:
-                node.vx, node.vy = node.vx * MAX_STEP / step, node.vy * MAX_STEP / step
-            node.setPos(xs[i] + node.vx, ys[i] + node.vy)
+            node.vx, node.vy = float(vx[i]), float(vy[i])
+            if not node.held:
+                node.setPos(float(x[i]), float(y[i]))
         for ring in self.rings.values():
             ring.fit()
 
-        self.alpha *= COOLING
+        self.alpha *= layout.COOLING
         if self._fit_pending and self.alpha < 0.25:
             self._fit_pending = False
             self.fit()
