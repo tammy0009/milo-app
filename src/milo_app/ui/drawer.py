@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from milo_app.ui import theme
-from milo_app.ui.format import pretty_name, prior_text, sig, units_text
+from milo_app.ui.format import pretty_name, prior_text, short_title, sig, units_text
 
 KIND_NAMES = {"sim": "Simulation", "descriptor": "Descriptor", "relationship": "Relationship",
               "prediction": "Prediction"}
@@ -108,11 +108,9 @@ class NodeInfo(QWidget):
         self.math.toggled.connect(self._toggle_math)
 
         self.details = QWidget()
-        self.grid = QGridLayout(self.details)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(6)
-        self.grid.setColumnStretch(1, 1)
+        self.sections = QVBoxLayout(self.details)
+        self.sections.setContentsMargins(0, 4, 0, 0)
+        self.sections.setSpacing(6)
         self.links_title = QLabel(objectName="FieldName")
         self.links = QVBoxLayout()
         self.links.setSpacing(2)
@@ -131,10 +129,11 @@ class NodeInfo(QWidget):
         box.addLayout(self.links)
         box.addStretch()
 
-    def show_node(self, kind: str, title: str, rows: list[tuple[str, str]], sims: list[tuple[str, str]],
-                  summary: dict[str, Any] | None = None) -> None:
-        """rows: (label, value) pairs; sims: (bundle_id, title) of the linked simulations. With a summary
-        (ghosts, relationships), it leads and the rows wait under "Show the math"."""
+    def show_node(self, kind: str, title: str, rows: list[tuple[str, str]] | list[dict[str, Any]],
+                  sims: list[tuple[str, str]], summary: dict[str, Any] | None = None) -> None:
+        """rows: (label, value) pairs, or sections (see _add_section); sims: (bundle_id, title) of the linked
+        simulations. With a summary (ghosts, relationships), it leads and the rows wait under "Show the
+        math"."""
         self.kind.setText(KIND_NAMES.get(kind, kind).upper())
         self.title.setText(title)
         self._fill_summary(summary)
@@ -144,17 +143,11 @@ class NodeInfo(QWidget):
         self.math.setChecked(False)
         self.math.blockSignals(False)
         self.details.setVisible(summary is None)
-        for layout in (self.grid, self.links):
-            while layout.count():
-                widget = layout.takeAt(0).widget()
-                if widget:
-                    widget.deleteLater()
-        for i, (label, value) in enumerate(rows):
-            name = QLabel(label, objectName="FieldName")
-            text = QLabel(value, wordWrap=True)
-            text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.grid.addWidget(name, i, 0, Qt.AlignmentFlag.AlignTop)
-            self.grid.addWidget(text, i, 1)
+        _clear(self.sections)
+        _clear(self.links)
+        sections = rows if rows and isinstance(rows[0], dict) else [{"rows": rows}] if rows else []
+        for section in sections:
+            self._add_section(section)
         self.links_title.setText(f"LINKED SIMULATIONS  {len(sims)}" if sims else "")
         for bundle_id, sim_title in sims:
             link = QPushButton(objectName="LinkButton")
@@ -164,6 +157,64 @@ class NodeInfo(QWidget):
             link.setToolTip(f"{sim_title}\n{bundle_id}")
             link.clicked.connect(lambda _=False, b=bundle_id: self.sim_clicked.emit(b))
             self.links.addWidget(link)
+
+    def minimumSizeHint(self):  # noqa: N802 - Qt's name
+        """As narrow as the panel: its text wraps to fit, so nothing is cut off at the right edge."""
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
+
+    def _add_section(self, section: dict[str, Any]) -> None:
+        """One block of the math: {"title"} over any of {"rows": [(label, value)]}, {"table": {"columns",
+        "rows", "sure": index of a confidence column, "align_left": first columns left-aligned}} (a row
+        that is a plain string is a group heading), and {"note"}."""
+        if section.get("title"):
+            head = QLabel(section["title"], objectName="KindLabel")
+            self.sections.addSpacing(8)
+            self.sections.addWidget(head)
+        if section.get("rows"):
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(5)
+            grid.setColumnStretch(1, 1)
+            for i, (label, value) in enumerate(section["rows"]):
+                name = QLabel(label, objectName="FieldName")
+                text = QLabel(value, wordWrap=True)
+                text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                grid.addWidget(name, i, 0, Qt.AlignmentFlag.AlignTop)
+                grid.addWidget(text, i, 1)
+            self.sections.addLayout(grid)
+        table = section.get("table")
+        if table:
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(4)
+            grid.setColumnStretch(table.get("stretch", 0), 1)  # the column that takes the spare width
+            columns, sure, left = table["columns"], table.get("sure"), table.get("align_left", 1)
+            for j, name in enumerate(columns):
+                label = QLabel(name, objectName="FieldName")
+                label.setAlignment(Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
+                grid.addWidget(label, 0, j)
+            for i, row in enumerate(table["rows"], start=1):
+                if isinstance(row, str):  # a group heading
+                    heading = QLabel(row, objectName="TableGroup")
+                    grid.addWidget(heading, i, 0, 1, len(columns))
+                    continue
+                for j, cell in enumerate(row):
+                    if j == sure and isinstance(cell, (int, float)):
+                        label = QLabel(f"{cell:.0%}", objectName="ChangeSure")
+                        label.setStyleSheet(f"color: {theme.confidence_color(cell)};")
+                    else:
+                        label = QLabel(str(cell), objectName="TableCell", wordWrap=True)  # never wider than the panel
+                    label.setAlignment((Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
+                                       | Qt.AlignmentFlag.AlignTop)
+                    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    grid.addWidget(label, i, j)
+            self.sections.addLayout(grid)
+        if section.get("note"):
+            note = QLabel(section["note"], objectName="FieldName", wordWrap=True)
+            note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.sections.addWidget(note)
 
     def _toggle_math(self, on: bool) -> None:
         self.details.setVisible(on)
@@ -218,6 +269,16 @@ class NodeInfo(QWidget):
             self.isolate.setText(f"Isolated to {isolate['campaign']}" if isolate["on"] else f"Isolate {isolate['campaign']}")
             self.isolate.setToolTip("Work this campaign's ghosts out from its own runs only (its ring turns while on)"
                                     if not isolate["on"] else "Click to use every run again")
+
+
+def _clear(layout) -> None:
+    """Empty a layout, nested layouts included."""
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _clear(item.layout())
 
 
 class Drawer(QFrame):
@@ -471,6 +532,111 @@ def prediction_summary(pred: dict[str, Any], base: dict[str, tuple[Any, Any]] | 
         notes.append(f"{same} other value{'s' if same != 1 else ''} stay about the same (within 1 %)")
     summary["more"] = "\n".join(notes)
     return summary
+
+
+def _stage(key: str) -> tuple[str, str]:
+    """(group, name) for a descriptor: "output:NPT.final_frame.Density" -> ("NPT", "Final Frame Density")."""
+    source, _, name = key.partition(":") if ":" in key else ("output", "", key)
+    if source == "input":
+        return "Settings", pretty_name(name.removeprefix("requested."))
+    if source == "bundle":
+        return "Run", pretty_name(name)
+    stage, _, rest = name.partition(".")
+    return (pretty_name(stage), pretty_name(rest)) if rest else ("Results", pretty_name(stage))
+
+
+def prediction_math(pred: dict[str, Any], titles: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Under a ghost's "Show the math": how its confidence is built, the run it proposes, every guess,
+    and where it comes from."""
+    sections: list[dict[str, Any]] = []
+    made_by = pred.get("made_by") if pred.get("source") == "verified" else pred.get("source")
+    guesses = loads(pred.get("predicted_json"), {})
+    if made_by == "mcp":
+        sections.append({"title": "HOW SURE", "rows": [("Confidence", f"{pred.get('confidence', 0):.1%}, the MCP's own")],
+                         "note": str(pred.get("reasoning") or "")})
+    elif pred.get("values_guessed"):
+        weakest = pred.get("weakest")
+        sections.append({"title": "HOW SURE", "rows": [
+            ("Overall", f"{pred.get('confidence', 0):.1%}: the average over all {pred['values_guessed']} values it guesses"),
+            ("Each value", "the chance the real value lands within 5 % of the guess,\n"
+                           "from its Student-t range: 2·T(tolerance / spread) − 1"),
+            ("Weakest", f"{_field(weakest)}, {pred.get('weakest_confidence', 0):.0%}" if weakest else "none"),
+        ]})
+    if pred.get("source") == "verified":
+        sections.append({"title": "HOW IT CAME OUT", "rows": [
+            ("Run", (titles or {}).get(pred.get("verified_by", ""), str(pred.get("verified_by", "")))),
+            ("Right", f"{pred.get('right')} of {pred.get('values')} values within 5 %"),
+            ("In range", f"{pred.get('inside')} of {pred.get('ranged')} numbers inside their 90 % ranges")]})
+    inputs = loads(pred.get("inputs_json"), {})
+    setting_rows = []
+    for key, v in inputs.items():
+        v = v if isinstance(v, dict) else {"value": v}
+        value = f"{_num(v['was'], 6)} → {_num(v.get('value'), 6)}" if "was" in v else _num(v.get("value"), 6)
+        setting_rows.append([_knob(key), value + _units(v.get("units"))])
+    if setting_rows:
+        sections.append({"title": "THE RUN IT PROPOSES", "table": {"columns": ["Setting", "Value"], "rows": setting_rows}})
+    rows: list[Any] = []
+    group = None
+    for key in sorted(guesses, key=lambda k: _stage(k if ":" in k else f"output:{k}")):
+        g = guesses[key] if isinstance(guesses[key], dict) else {"guess": guesses[key]}
+        stage, name = _stage(key if ":" in key else f"output:{key}")
+        if stage != group:
+            rows.append(stage)
+            group = stage
+        value = g.get("guess", g.get("value"))
+        if isinstance(g.get("low"), (int, float)):
+            spread = f"{_num(g['low'], 4)} – {_num(g['high'], 4)}"
+        elif isinstance(g.get("spread"), (int, float)):
+            spread = f"± {_num(g['spread'], 3)}"
+        else:
+            spread = ""
+        rows.append([name, f"{_num(value, 5)}{_units(g.get('units'))}", spread, g.get("confidence", "")])
+    if rows:
+        sections.append({"title": f"EVERY GUESS  {len(guesses)}",
+                         "table": {"columns": ["Value", "Guess", "90 % range", "Sure"], "rows": rows, "sure": 3}})
+    source = [("Made by", "the MCP, by reasoning" if made_by == "mcp" else "MILO, by calculation")]
+    if pred.get("isolated"):
+        source.append(("Runs", f"only the {pred.get('sims_used')} runs in {pred['isolated']} (isolated)"))
+    elif pred.get("sims_used"):
+        source.append(("Runs", f"every run with the same knobs ({pred.get('sims_used')} in the graph)"))
+    if pred.get("model"):
+        source.append(("Model", str(pred["model"])))
+    if pred.get("calc_id"):
+        source.append(("Calculation", str(pred["calc_id"])))
+    sections.append({"title": "WHERE IT COMES FROM", "rows": source, "note": "The rules: ghost.md, sections 4 and 5."})
+    return sections
+
+
+def relationship_math(r: dict[str, Any], titles: dict[str, str]) -> list[dict[str, Any]]:
+    """Under a relationship's "Show the math": the runs it rests on, and its confidence step by step."""
+    a, b = _field(r.get("a", "")), _field(r.get("b", ""))
+    points = loads(r.get("points"), [])
+    sections: list[dict[str, Any]] = []
+    if points:
+        sections.append({"title": f"THE RUNS  {len(points)}", "table": {
+            "columns": ["Run", a + _units(r.get("a_units")), b + _units(r.get("b_units"))],
+            "rows": [[short_title(titles.get(s, s), 26), _num(x, 5), _num(y, 5)] for s, x, y in points]}})
+    if "t" not in r:
+        return sections + [{"title": "WHY NO SCORE", "note": r.get("note", "needs at least 3 runs where both change")}]
+    null = (f"from all {r.get('pairs_tested')} pairs: z of unrelated pairs ~ Normal({r['null_mean']:.2f}, {r['null_sd']:.2f}²)"
+            if r.get("null") == "empirical" else f"the textbook one, Normal(0, 1) (only {r.get('pairs_tested')} pairs)")
+    steps = [
+        ["1", "Correlation", f"r = {r['r']:+.4f}"],
+        ["2", "Test statistic", f"t = {r['t']:.4g}  ({r['df']} df)"],
+        ["3", "p-value", f"p = {r['p']:.3g}"],
+        ["4", "On the normal scale", f"z = {r['z']:+.3f}"],
+        ["5", "Unrelated pairs look like", null],
+        ["6", "Share unrelated", f"π0 = {r['pi0']:.3f}" + ("" if r.get("null") == "empirical" else " (assumed)")],
+        ["7", "Chance it is NOT real", f"lfdr = {r['lfdr']:.3f}"],
+        ["8", "Confidence", f"1 − lfdr = {r.get('confidence', 0):.1%}"],
+    ]
+    sections.append({"title": "HOW SURE, STEP BY STEP",
+                     "table": {"columns": ["", "Step", "Result"], "rows": steps, "align_left": 2, "stretch": 1}})
+    sections.append({"title": "WHERE IT COMES FROM", "rows": [
+        ("Method", "Efron's local false discovery rate (statsmodels)"),
+        ("Kind", "a knob drives it" if r.get("kind") == "cause" else "they move together (often through a shared knob)"),
+        ("Calculation", str(r.get("calc_id", "")))], "note": "The rules: ghost.md, section 5.3."})
+    return sections
 
 
 STRENGTH = ((0.9, "closely"), (0.6, "clearly"), (0.3, "loosely"), (0.0, "barely"))
