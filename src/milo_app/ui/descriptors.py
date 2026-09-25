@@ -18,13 +18,14 @@ from typing import Any
 from PySide6.QtCore import QPoint, QRect, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QLabel, QLineEdit,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QHeaderView, QLabel, QLineEdit,
+    QHBoxLayout, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from milo_app.ui import prefs, theme
 from milo_app.ui.campaigns import CAMPAIGN_ROLE, CHECKABLE, SIM_ROLE, CampaignList, run_item
 from milo_app.ui.format import landed, pretty_name
+from milo_app.ui.scrollbar import LeftScrollBar
 
 SECTIONS = (("bundle", "Bundle"), ("input", "Inputs"), ("output", "Outputs"), ("campaigns", "Campaigns"),
             ("feed", "Sim Feed"))
@@ -56,6 +57,7 @@ class DescriptorPanel(QWidget):
 
         title = QLabel("DESCRIPTORS", objectName="PanelTitle")
         self.filter = QLineEdit(placeholderText="Filter")
+        self.filter.setMaximumWidth(246)
         self.filter.textChanged.connect(self._apply_filter)
 
         self.tree = QTreeWidget()
@@ -63,7 +65,12 @@ class DescriptorPanel(QWidget):
         self.tree.viewport().setAutoFillBackground(False)
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.tree.setColumnWidth(0, 246)
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tree.itemChanged.connect(self._on_item)
+        self.scrollbar = LeftScrollBar(self.tree)
         self.sections: dict[str, QTreeWidgetItem] = {}
         for source, label in SECTIONS:
             item = QTreeWidgetItem([label])
@@ -78,11 +85,20 @@ class DescriptorPanel(QWidget):
         self.campaigns.recolored.connect(self.recolored)
 
         box = QVBoxLayout(self)
-        box.setContentsMargins(14, 14, 70, 10)  # leave the fading edge free of text and controls
+        box.setContentsMargins(0, 14, 70, 10)
         box.setSpacing(8)
+        title.setContentsMargins(14, 0, 0, 0)
         box.addWidget(title)
-        box.addWidget(self.filter)
-        box.addWidget(self.tree, 1)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(14, 0, 0, 0)
+        filter_row.addWidget(self.filter)
+        box.addLayout(filter_row)
+        tree_row = QHBoxLayout()
+        tree_row.setContentsMargins(0, 0, 0, 0)
+        tree_row.setSpacing(0)
+        tree_row.addWidget(self.scrollbar)
+        tree_row.addWidget(self.tree, 1)
+        box.addLayout(tree_row, 1)
 
     def attach_canvas(self, canvas: QWidget) -> None:
         """Use the graph viewport, which is behind this panel, as the glass backdrop."""

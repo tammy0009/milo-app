@@ -143,8 +143,8 @@ class NodeInfo(QWidget):
         self.math.setChecked(False)
         self.math.blockSignals(False)
         self.details.setVisible(summary is None)
-        _clear(self.sections)
-        _clear(self.links)
+        clear_layout(self.sections)
+        clear_layout(self.links)
         sections = rows if rows and isinstance(rows[0], dict) else [{"rows": rows}] if rows else []
         for section in sections:
             self._add_section(section)
@@ -165,56 +165,7 @@ class NodeInfo(QWidget):
         return hint
 
     def _add_section(self, section: dict[str, Any]) -> None:
-        """One block of the math: {"title"} over any of {"rows": [(label, value)]}, {"table": {"columns",
-        "rows", "sure": index of a confidence column, "align_left": first columns left-aligned}} (a row
-        that is a plain string is a group heading), and {"note"}."""
-        if section.get("title"):
-            head = QLabel(section["title"], objectName="KindLabel")
-            self.sections.addSpacing(8)
-            self.sections.addWidget(head)
-        if section.get("rows"):
-            grid = QGridLayout()
-            grid.setHorizontalSpacing(14)
-            grid.setVerticalSpacing(5)
-            grid.setColumnStretch(1, 1)
-            for i, (label, value) in enumerate(section["rows"]):
-                name = QLabel(label, objectName="FieldName")
-                text = QLabel(value, wordWrap=True)
-                text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                grid.addWidget(name, i, 0, Qt.AlignmentFlag.AlignTop)
-                grid.addWidget(text, i, 1)
-            self.sections.addLayout(grid)
-        table = section.get("table")
-        if table:
-            grid = QGridLayout()
-            grid.setHorizontalSpacing(10)
-            grid.setVerticalSpacing(4)
-            grid.setColumnStretch(table.get("stretch", 0), 1)  # the column that takes the spare width
-            columns, sure, left = table["columns"], table.get("sure"), table.get("align_left", 1)
-            for j, name in enumerate(columns):
-                label = QLabel(name, objectName="FieldName")
-                label.setAlignment(Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
-                grid.addWidget(label, 0, j)
-            for i, row in enumerate(table["rows"], start=1):
-                if isinstance(row, str):  # a group heading
-                    heading = QLabel(row, objectName="TableGroup")
-                    grid.addWidget(heading, i, 0, 1, len(columns))
-                    continue
-                for j, cell in enumerate(row):
-                    if j == sure and isinstance(cell, (int, float)):
-                        label = QLabel(f"{cell:.0%}", objectName="ChangeSure")
-                        label.setStyleSheet(f"color: {theme.confidence_color(cell)};")
-                    else:
-                        label = QLabel(str(cell), objectName="TableCell", wordWrap=True)  # never wider than the panel
-                    label.setAlignment((Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
-                                       | Qt.AlignmentFlag.AlignTop)
-                    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                    grid.addWidget(label, i, j)
-            self.sections.addLayout(grid)
-        if section.get("note"):
-            note = QLabel(section["note"], objectName="FieldName", wordWrap=True)
-            note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.sections.addWidget(note)
+        add_section(self.sections, section)
 
     def _toggle_math(self, on: bool) -> None:
         self.details.setVisible(on)
@@ -271,14 +222,67 @@ class NodeInfo(QWidget):
                                     if not isolate["on"] else "Click to use every run again")
 
 
-def _clear(layout) -> None:
+def add_section(box: QVBoxLayout, section: dict[str, Any]) -> None:
+    """One block of the math: {"title"} over any of {"rows": [(label, value)]}, {"table": {"columns",
+    "rows", "sure": index of a confidence column, "align_left": first columns left-aligned}} (a row
+    that is a plain string is a group heading), and {"note"}."""
+    if section.get("title"):
+        head = QLabel(section["title"], objectName="KindLabel")
+        box.addSpacing(8)
+        box.addWidget(head)
+    if section.get("rows"):
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(5)
+        grid.setColumnStretch(1, 1)
+        for i, (label, value) in enumerate(section["rows"]):
+            name = QLabel(label, objectName="FieldName")
+            text = QLabel(value, wordWrap=True)
+            text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            grid.addWidget(name, i, 0, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(text, i, 1)
+        box.addLayout(grid)
+    table = section.get("table")
+    if table:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(table.get("stretch", 0), 1)  # the column that takes the spare width
+        columns, sure, left = table["columns"], table.get("sure"), table.get("align_left", 1)
+        for j, name in enumerate(columns):
+            label = QLabel(name, objectName="FieldName")
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
+            grid.addWidget(label, 0, j)
+        for i, row in enumerate(table["rows"], start=1):
+            if isinstance(row, str):  # a group heading
+                heading = QLabel(row, objectName="TableGroup")
+                grid.addWidget(heading, i, 0, 1, len(columns))
+                continue
+            for j, cell in enumerate(row):
+                if j == sure and isinstance(cell, (int, float)):
+                    label = QLabel(f"{cell:.0%}", objectName="ChangeSure")
+                    label.setStyleSheet(f"color: {theme.confidence_color(cell)};")
+                else:
+                    label = QLabel(str(cell), objectName="TableCell", wordWrap=True)  # never wider than the panel
+                label.setAlignment((Qt.AlignmentFlag.AlignLeft if j < left else Qt.AlignmentFlag.AlignRight)
+                                   | Qt.AlignmentFlag.AlignTop)
+                label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                grid.addWidget(label, i, j)
+        box.addLayout(grid)
+    if section.get("note"):
+        note = QLabel(section["note"], objectName="FieldName", wordWrap=True)
+        note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        box.addWidget(note)
+
+
+def clear_layout(layout) -> None:
     """Empty a layout, nested layouts included."""
     while layout.count():
         item = layout.takeAt(0)
         if item.widget():
             item.widget().deleteLater()
         elif item.layout():
-            _clear(item.layout())
+            clear_layout(item.layout())
 
 
 class Drawer(QFrame):
@@ -636,6 +640,100 @@ def relationship_math(r: dict[str, Any], titles: dict[str, str]) -> list[dict[st
         ("Method", "Efron's local false discovery rate (statsmodels)"),
         ("Kind", "a knob drives it" if r.get("kind") == "cause" else "they move together (often through a shared knob)"),
         ("Calculation", str(r.get("calc_id", "")))], "note": "The rules: ghost.md, section 5.3."})
+    return sections
+
+
+def link_confidence(relationships: list[dict[str, Any]], a_keys: list[str], b: str) -> float | None:
+    """How sure the stored relationship between a descriptor (any of its names) and `b` is real."""
+    for rel in relationships:
+        ra, rb = rel.get("a_keys") or [rel.get("a")], rel.get("b_keys") or [rel.get("b")]
+        if (set(a_keys) & set(ra) and b in rb) or (set(a_keys) & set(rb) and b in ra):
+            sure = rel.get("confidence")
+            return sure if isinstance(sure, (int, float)) and "z" in rel else None
+    return None
+
+
+def _main_model(models: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    return max(models, key=lambda m: m.get("n") or 0) if models else None
+
+
+def descriptor_summary(data: dict[str, Any], models: list[dict[str, Any]] | None,
+                       relationships: list[dict[str, Any]]) -> dict[str, Any]:
+    """A descriptor value: what it is and how many runs have it; how well MILO can predict the field
+    (R² for one that changes, the rule of succession for one that does not); what moves it."""
+    runs = len(data.get("sims") or [])
+    summary: dict[str, Any] = {"headline_label": "THIS VALUE", "headline": data["label"],
+                               "more": f"{runs} run{'s' if runs != 1 else ''} {'have' if runs != 1 else 'has'} it"}
+    m = _main_model(models)
+    if m is None:
+        return summary | {"confidence": None, "confidence_note": "MILO does not model this field (text or lists)"}
+    if m.get("method") == "rule of succession":
+        counts = loads(m.get("counts"), {})
+        seen = counts.get(str(m.get("guess")), 0)
+        return summary | {"confidence": m.get("confidence"),
+                          "confidence_note": f"sure the next run has {_num(m.get('guess'), 5)}{_units(m.get('units'))} too "
+                                             f"(it did in {seen} of {m.get('n')} runs)"}
+    r2 = m.get("r2")
+    summary |= {"confidence": max(r2, 0.0) if isinstance(r2, (int, float)) else None,
+                "confidence_note": f"of how {m.get('name')} varies is explained by the settings (R², over {m.get('n')} runs)"}
+    keys = m.get("aliases") or [m.get("descriptor")]
+    rows = []
+    for k, s, e, lo, hi in zip(m.get("predictors") or [], m.get("slopes") or [], m.get("slope_sd") or [],
+                               m.get("x_lo") or [], m.get("x_hi") or []):
+        move, err = s * (hi - lo), e * (hi - lo)
+        rows.append({"name": _knob(k), "move": f"{move:+.3g} ± {err:.2g}{_units(m.get('units'))}",
+                     "confidence": link_confidence(relationships, keys, k),
+                     "tip": f"across the {_knob(k)} tried, {_num(lo, 4)} to {_num(hi, 4)}"
+                            + (": could still go either way" if err > abs(move) else "")})
+    summary |= {"changes_label": "WHAT MOVES IT (ACROSS THE RANGE TRIED)", "changes": rows}
+    if m.get("left_out"):
+        summary["more"] += "\nThe same in all these runs, so no effect yet: " + ", ".join(_knob(k) for k in m["left_out"])
+    return summary
+
+
+def descriptor_math(data: dict[str, Any], models: list[dict[str, Any]] | None,
+                    titles: dict[str, str]) -> list[dict[str, Any]]:
+    """Under a descriptor's "Show the math": the value exactly, then how each family of runs models it."""
+    sections: list[dict[str, Any]] = [{"title": "THIS VALUE", "rows": [
+        ("Field", _field(data["group"])),
+        ("From", {"bundle": "bundle.json", "input": "Inputs", "output": "Outputs"}.get(data["group"].partition(":")[0], "")),
+        ("Exactly" if len(data["exact"]) == 1 else "Exactly, one of", "\n".join(data["exact"]))]}]
+    for m in sorted(models or [], key=lambda m: -(m.get("n") or 0)):
+        title = "HOW MILO GUESSES IT" + (f"  ·  RUNS VARYING {m['family'].upper()}" if len(models) > 1 and m.get("family") else "")
+        aliases = [a for a in (m.get("aliases") or []) if a != m.get("descriptor")]
+        if m.get("method") == "rule of succession":
+            counts = loads(m.get("counts"), {})
+            n, k = m.get("n"), m.get("categories")
+            seen = counts.get(str(m.get("guess")), 0)
+            sections.append({"title": title,
+                             "rows": [("Method", "Laplace's rule of succession (ghost.md 4.2)"),
+                                      ("Guess", f"{_num(m.get('guess'), 6)}{_units(m.get('units'))}"),
+                                      ("Confidence", f"(times seen + 1) / (runs + K) = ({seen} + 1) / ({n} + {k}) = "
+                                                     f"{m.get('confidence', 0):.1%}\nK: the {k - 1} value{'s' if k != 2 else ''} "
+                                                     "seen, plus one for something new")]
+                                     + ([("Same as", ", ".join(_field(a) for a in aliases))] if aliases else []),
+                             "table": {"columns": ["Value seen", "Runs"],
+                                       "rows": [[_num(v, 6) if not isinstance(v, str) else v, str(c)] for v, c in counts.items()]}})
+            continue
+        units = _units(m.get("units"))
+        knobs = m.get("predictors") or []
+        terms = " ".join(f"{s:+.4g} × {_knob(k)}" for k, s in zip(knobs, m.get("slopes") or []))
+        sections.append({"title": title, "rows": [
+            ("Method", f"Bayesian linear regression on the settings, over {m.get('n')} runs (ghost.md 4.1)"),
+            ("Equation", f"{m.get('name')} = {_num(m.get('intercept'), 6)} {terms}{units}"),
+            ("Fit", f"R² = {m['r2']:.3f}" if isinstance(m.get("r2"), (int, float)) else "n/a"),
+            ("Scatter", f"± {_num(m['noise_sd'], 3)}{units} run to run" if m.get("noise_sd") is not None else "n/a"),
+            ("Prior", prior_text(m.get("prior"))),
+        ] + ([("Same as", ", ".join(_field(a) for a in aliases))] if aliases else [])
+          + ([("Left out", "the same in all these runs: " + ", ".join(_knob(k) for k in m["left_out"]))] if m.get("left_out") else [])})
+        if knobs:
+            sections.append({"table": {"columns": ["Setting", "Slope per unit", "±"],
+                                       "rows": [[_knob(k), f"{s:+.4g}{units}", f"{e:.3g}"]
+                                                for k, s, e in zip(knobs, m.get("slopes") or [], m.get("slope_sd") or [])]}})
+        sections.append({"table": {"columns": ["Run", "Real", "The line"],
+                                   "rows": [[short_title(titles.get(s, s), 26), _num(o, 5), _num(f, 5)]
+                                            for s, o, f in zip(m.get("sims") or [], m.get("observed") or [], m.get("fitted") or [])]},
+                         "note": f"Calculation {m.get('calc_id', '')}"})
     return sections
 
 

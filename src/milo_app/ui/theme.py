@@ -199,10 +199,9 @@ QTabBar::tab:selected {{ color: {ink}; border-bottom: 2px solid {ink}; }}
 QWidget#Descriptors {{ background: transparent; }}
 QWidget#Descriptors QLineEdit {{ background: {ground}; }}
 QWidget#Descriptors QTreeWidget, QWidget#Descriptors QTreeWidget::viewport {{ background: transparent; }}
-QWidget#Descriptors QScrollBar:vertical {{ background: transparent; width: 14px; }}
-QWidget#Descriptors QScrollBar::handle:vertical {{ background: rgba(90, 90, 90, 125);
-                                                  border-radius: 7px; min-height: 44px; }}
-QWidget#Descriptors QScrollBar::handle:vertical:hover {{ background: rgba(65, 65, 65, 190); }}
+QScrollBar#DescriptorScroll:vertical {{ background: transparent; width: 14px; }}
+QScrollBar#DescriptorScroll::handle:vertical {{ background: #555555; border-radius: 7px; min-height: 30px; }}
+QScrollBar#DescriptorScroll::handle:vertical:hover {{ background: #222222; }}
 QLabel#PanelTitle {{ color: {muted}; font-size: {small}px; }}
 QTreeWidget {{ background: {surface}; border: none; }}
 QTreeWidget::item {{ padding: 3px 0; }}

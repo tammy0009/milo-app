@@ -32,7 +32,8 @@ from milo_app.ui import prefs, theme
 from milo_app.ui.campaigns import color_of as campaign_color
 from milo_app.ui.descriptors import DescriptorPanel
 from milo_app.ui.drawer import (
-    Drawer, NodeInfo, loads, node_rows, prediction_math, prediction_summary, relationship_math, relationship_summary,
+    Drawer, NodeInfo, descriptor_math, descriptor_summary, loads, node_rows, prediction_math, prediction_summary,
+    relationship_math, relationship_summary,
 )
 from milo_app.ui.format import (
     elapsed, ghost_title, pretty_name, quantity, short_title, shown_value, sig, size_text, test_summary,
@@ -489,6 +490,7 @@ class MainWindow(QMainWindow):
         sims = graph.with_redos(graph.list_simulations(self.driver))
         self._titles = {s["bundle_id"]: str(s.get("title") or s["bundle_id"]) for s in sims}
         relationships = graph.list_relationships(self.driver)
+        self._relationships = relationships
         predictions = graph.list_predictions(self.driver)
         self._models = {}
         for m in graph.list_models(self.driver):
@@ -642,7 +644,10 @@ class MainWindow(QMainWindow):
                 summary["isolate"] = {"campaign": campaign, "on": campaign in self.isolated}
         elif kind == "relationship":
             summary = relationship_summary(data["rel"])
+        elif kind == "descriptor":
+            summary = descriptor_summary(data, models, getattr(self, "_relationships", []))
         math = {"prediction": lambda: prediction_math(data["pred"], self._titles),
+                "descriptor": lambda: descriptor_math(data, models, self._titles),
                 "relationship": lambda: relationship_math(data["rel"], self._titles)}.get(
             kind, lambda: node_rows(data, models, self._titles))()
         self.info.show_node(kind, titles[kind](), math, sims, summary)

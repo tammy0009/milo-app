@@ -33,7 +33,9 @@ from milo_app import predict
 from milo_app.graph import campaign_of, failure, with_redos
 from milo_app.ui.campaigns import CampaignList
 from milo_app.ui import latex, prefs, theme
+from milo_app.ui.drawer import add_section, clear_layout
 from milo_app.ui.format import pretty_name, prior_text, sig, units_text
+from milo_app.ui.scrollbar import LeftScrollBar
 
 KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 SECTIONS = (("bundle", "Bundle"), ("input", "Inputs"), ("output", "Outputs"))
@@ -192,6 +194,7 @@ class FormulaView(QWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
         self.tree.itemChanged.connect(self._on_item)
+        self.scrollbar = LeftScrollBar(self.tree)
         self.sections: dict[str, QTreeWidgetItem] = {}
         for source, label in SECTIONS:
             item = QTreeWidgetItem([label])
@@ -206,6 +209,7 @@ class FormulaView(QWidget):
         self.runs_tree.setIndentation(12)
         self.runs_tree.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
         self.runs_tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # no focus frame round the rows
+        self.runs_scrollbar = LeftScrollBar(self.runs_tree, page_step=48)
         section = QTreeWidgetItem(["Campaigns"])
         section.setFlags(Qt.ItemFlag.ItemIsEnabled)
         section.setFont(0, theme.font(theme.SIZES["small"], bold=True))
@@ -218,13 +222,28 @@ class FormulaView(QWidget):
         self.runs_tree.itemExpanded.connect(lambda _i: self._fit_runs_tree())
         self.runs_tree.itemCollapsed.connect(lambda _i: self._fit_runs_tree())
         box = QVBoxLayout(side)
-        box.setContentsMargins(14, 14, 8, 10)
+        box.setContentsMargins(0, 14, 8, 10)
         box.setSpacing(8)
-        box.addWidget(self.runs_tree)
+        runs_row = QHBoxLayout()
+        runs_row.setContentsMargins(0, 0, 0, 0)
+        runs_row.setSpacing(0)
+        runs_row.addWidget(self.runs_scrollbar)
+        runs_row.addWidget(self.runs_tree, 1)
+        box.addLayout(runs_row)
         box.addSpacing(6)
-        box.addWidget(QLabel("DESCRIPTORS WITH NUMBERS", objectName="PanelTitle"))
-        box.addWidget(self.filter)
-        box.addWidget(self.tree, 1)
+        title = QLabel("DESCRIPTORS WITH NUMBERS", objectName="PanelTitle")
+        title.setContentsMargins(14, 0, 0, 0)
+        box.addWidget(title)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(14, 0, 0, 0)
+        filter_row.addWidget(self.filter)
+        box.addLayout(filter_row)
+        tree_row = QHBoxLayout()
+        tree_row.setContentsMargins(0, 0, 0, 0)
+        tree_row.setSpacing(0)
+        tree_row.addWidget(self.scrollbar)
+        tree_row.addWidget(self.tree, 1)
+        box.addLayout(tree_row, 1)
 
         # right: the formula
         self.hint = QLabel(objectName="Empty", wordWrap=True)
@@ -272,11 +291,9 @@ class FormulaView(QWidget):
         self.math = QPushButton("Show the math", objectName="Chip", checkable=True)
         self.math.toggled.connect(self._toggle_math)
         self.math_box = QWidget()
-        self.facts = QGridLayout(self.math_box)
-        self.facts.setContentsMargins(0, 0, 0, 0)
-        self.facts.setHorizontalSpacing(14)
-        self.facts.setVerticalSpacing(6)
-        self.facts.setColumnStretch(1, 1)
+        self.math_layout = QVBoxLayout(self.math_box)  # sections and tables, as in the graph's panels
+        self.math_layout.setContentsMargins(0, 0, 0, 0)
+        self.math_layout.setSpacing(6)
         self.math_box.hide()
         self.chart = FitChart()
         self.calc_title = QLabel("CALCULATOR", objectName="KindLabel")
@@ -490,11 +507,8 @@ class FormulaView(QWidget):
         self.hint.setText(hint)
         self.hint.setVisible(bool(hint))
         self.body.setVisible(self.fit is not None or len(self.checked) >= 2)
-        for layout in (self.facts, self.calc_inputs, self.says):
-            while layout.count():
-                widget = layout.takeAt(0).widget()
-                if widget:
-                    widget.deleteLater()
+        for layout in (self.math_layout, self.calc_inputs, self.says):
+            clear_layout(layout)
         self._calc_fields = {}
         fit = self.fit
         if fit is None:
@@ -517,28 +531,8 @@ class FormulaView(QWidget):
         self.copy.show()
         self.symbolic.show()
 
-        rows: list[tuple[str, str]] = []
-        for k, s, e in zip(fit["predictors"], fit["slopes"], fit["slope_sd"]):
-            pu = units_text(fit["predictor_units"].get(k))
-            per = f" per {pu}" if pu else " per unit"
-            rows.append((f"× {name(k)}", f"{number(s)} ± {number(e, 3)}{units}{per}"))
-            rows.append(("   relationship", self._relationship_text(fit["target"], k)))
-        for k in fit.get("left_out") or []:
-            rows.append((f"× {name(k)}", "left out: the same in every one of these runs"))
-        rows += [
-            ("Fit", f"R² = {fit['r2']:.3f}: the line explains {max(fit['r2'], 0):.0%} of how "
-                    f"{name(fit['target'])} varies across these runs" if fit.get("r2") is not None else "n/a"),
-            ("Runs used", f"{fit['n']} (every run{self._scope_words()} that has all of these)"),
-            ("Scatter", f"± {number(fit['noise_sd'], 3)}{units} run to run (estimated)" if fit.get("noise_sd") else "n/a"),
-            ("Method", "Bayesian linear regression (ghost.md 4.1). ± is each slope's own uncertainty;\n"
-                       "the line is fitted anew whenever runs arrive."),
-            ("Prior", prior_text(fit.get("prior"))),
-        ]
-        for i, (label, text) in enumerate(rows):
-            value = QLabel(text, wordWrap=True)
-            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.facts.addWidget(QLabel(label, objectName="FieldName"), i, 0, Qt.AlignmentFlag.AlignTop)
-            self.facts.addWidget(value, i, 1)
+        for section in self._math_sections(fit, units):
+            add_section(self.math_layout, section)
 
         one = len(fit["predictors"]) == 1
         self.chart.setVisible(one)
@@ -691,6 +685,43 @@ class FormulaView(QWidget):
                                    f"of how {target} varies is explained",
                                    theme.confidence_color(max(r2, 0)) if r2 is not None else None)
         self.tiles["runs"].set(str(fit["n"]), f"runs used{self._scope_words()}")
+
+    def _math_sections(self, fit: dict[str, Any], units: str) -> list[dict[str, Any]]:
+        """Under "Show the math": the line term by term, how well it fits, how sure each link is (step
+        results), and the method."""
+        line = [["Where it starts", f"{number(fit['intercept'], 6)}{units}", ""]]
+        for k, s, e in zip(fit["predictors"], fit["slopes"], fit["slope_sd"]):
+            pu = units_text(fit["predictor_units"].get(k))
+            line.append([f"× {name(k)}", f"{signed(s)}{units}" + (f" per {pu}" if pu else " per unit"), number(e, 3)])
+        sections: list[dict[str, Any]] = [{"title": "THE LINE, TERM BY TERM",
+                                           "table": {"columns": ["Term", "Value", "±"], "rows": line},
+                                           "note": "± is each number's own uncertainty; the line is fitted anew "
+                                                   "whenever runs arrive."}]
+        if fit.get("left_out"):
+            sections[0]["note"] += " Left out, the same in every one of these runs: " + ", ".join(
+                name(k) for k in fit["left_out"]) + "."
+        sections.append({"title": "HOW WELL IT FITS", "rows": [
+            ("R²", f"{fit['r2']:.3f}: the line explains {max(fit['r2'], 0):.0%} of how {name(fit['target'])} varies"
+             if fit.get("r2") is not None else "n/a"),
+            ("Scatter", f"± {number(fit['noise_sd'], 3)}{units} run to run (estimated)" if fit.get("noise_sd") else "n/a"),
+            ("Runs", f"{fit['n']}, every run{self._scope_words()} that has all of these"),
+        ]})
+        links = []
+        for k in fit["predictors"]:
+            rel = self._relationship(fit["target"], k)
+            if rel is not None and "z" in rel:
+                links.append([name(k).removeprefix("Requested "), f"{rel['r']:+.3f}", f"{rel['p']:.3g}", rel.get("confidence")])
+            else:
+                links.append([name(k).removeprefix("Requested "), "–", "–", "not scored"])
+        sections.append({"title": "HOW SURE EACH LINK IS",
+                         "table": {"columns": ["Link with", "r", "p", "Sure"], "rows": links, "sure": 3},
+                         "note": f"Efron's local false discovery rate over every pair, runs{self._scope_words() or ' in the graph'}; "
+                                 "double-click the relationship node on the graph for every step."})
+        sections.append({"title": "METHOD", "rows": [
+            ("Fit", "Bayesian linear regression (ghost.md 4.1)"),
+            ("Prior", prior_text(fit.get("prior"))),
+        ]})
+        return sections
 
     def _toggle_math(self, on: bool) -> None:
         self.math_box.setVisible(on)
