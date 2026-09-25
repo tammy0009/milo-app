@@ -15,8 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QLineEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import QPoint, QRect, QRectF, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPixmap
+from PySide6.QtWidgets import (
+    QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QLabel, QLineEdit,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+)
 
 from milo_app.ui import prefs, theme
 from milo_app.ui.campaigns import CAMPAIGN_ROLE, CHECKABLE, SIM_ROLE, CampaignList, run_item
@@ -38,7 +42,13 @@ class DescriptorPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("Descriptors")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._backdrop: QWidget | None = None
+        self._glass: QImage | None = None
+        self._refresh = QTimer(self)
+        self._refresh.setSingleShot(True)
+        self._refresh.setInterval(60)
+        self._refresh.timeout.connect(self._refresh_glass)
         self.store = prefs.store()
         saved = self.store.value("active_groups", DEFAULT_GROUPS)
         self.active: list[str] = list(saved) if isinstance(saved, list) else [saved] if saved else []
@@ -49,6 +59,8 @@ class DescriptorPanel(QWidget):
         self.filter.textChanged.connect(self._apply_filter)
 
         self.tree = QTreeWidget()
+        self.tree.setAutoFillBackground(False)
+        self.tree.viewport().setAutoFillBackground(False)
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
         self.tree.itemChanged.connect(self._on_item)
@@ -66,11 +78,79 @@ class DescriptorPanel(QWidget):
         self.campaigns.recolored.connect(self.recolored)
 
         box = QVBoxLayout(self)
-        box.setContentsMargins(14, 14, 8, 10)
+        box.setContentsMargins(14, 14, 70, 10)  # leave the fading edge free of text and controls
         box.setSpacing(8)
         box.addWidget(title)
         box.addWidget(self.filter)
         box.addWidget(self.tree, 1)
+
+    def attach_canvas(self, canvas: QWidget) -> None:
+        """Use the graph viewport, which is behind this panel, as the glass backdrop."""
+        self._backdrop = canvas.viewport()
+        canvas.graph_scene.changed.connect(self.schedule_glass)
+        canvas.horizontalScrollBar().valueChanged.connect(self.schedule_glass)
+        canvas.verticalScrollBar().valueChanged.connect(self.schedule_glass)
+
+    def schedule_glass(self, *_args) -> None:
+        if self.isVisible() and not self._refresh.isActive():
+            self._refresh.start()
+
+    def _refresh_glass(self) -> None:
+        self._glass = None
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        self._glass = None
+        super().resizeEvent(event)
+
+    def _blurred_backdrop(self) -> QImage | None:
+        if self._backdrop is None or not self._backdrop.isVisible() or self.width() < 1 or self.height() < 1:
+            return None
+        if self._glass is not None:
+            return self._glass
+        origin = self.mapTo(self._backdrop, QPoint(0, 0))
+        source = self._backdrop.grab(QRect(origin, self.size()))
+        # Blur a reduced copy; the full-size canvas remains sharp outside the glass.
+        size = self.size() / 3
+        small = source.toImage().scaled(size, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                        Qt.TransformationMode.SmoothTransformation)
+        small.setDevicePixelRatio(1)
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(QPixmap.fromImage(small))
+        blur = QGraphicsBlurEffect()
+        blur.setBlurRadius(6)
+        item.setGraphicsEffect(blur)
+        scene.addItem(item)
+        scene.setSceneRect(QRectF(0, 0, small.width(), small.height()))
+        image = QImage(small.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        scene.render(painter, QRectF(image.rect()), scene.sceneRect())
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        blur_fade = QLinearGradient(0, 0, image.width(), 0)
+        blur_fade.setColorAt(0.0, QColor(255, 255, 255, 255))
+        blur_fade.setColorAt(0.65, QColor(255, 255, 255, 255))
+        blur_fade.setColorAt(0.85, QColor(255, 255, 255, 170))
+        blur_fade.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.fillRect(image.rect(), blur_fade)
+        painter.end()
+        self._glass = image
+        return image
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        painter = QPainter(self)
+        glass = self._blurred_backdrop()
+        if glass is not None:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawImage(self.rect(), glass)
+        fade = QLinearGradient(0, 0, self.width(), 0)
+        fade.setColorAt(0.0, QColor(255, 255, 255, 248))
+        fade.setColorAt(0.60, QColor(255, 255, 255, 230))
+        fade.setColorAt(0.80, QColor(255, 255, 255, 175))
+        fade.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.fillRect(self.rect(), fade)
+        painter.end()
+        super().paintEvent(event)
 
     @property
     def hidden_sims(self) -> set[str]:

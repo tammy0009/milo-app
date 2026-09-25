@@ -164,8 +164,9 @@ QTabBar::tab {{ background: transparent; color: {muted}; padding: 8px 14px; bord
                 border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {ink}; border-bottom: 2px solid {ink}; }}
 
-QWidget#Descriptors {{ background: {surface}; }}
+QWidget#Descriptors {{ background: transparent; }}
 QWidget#Descriptors QLineEdit {{ background: {ground}; }}
+QWidget#Descriptors QTreeWidget, QWidget#Descriptors QTreeWidget::viewport {{ background: transparent; }}
 QLabel#PanelTitle {{ color: {muted}; font-size: {small}px; }}
 QTreeWidget {{ background: {surface}; border: none; }}
 QTreeWidget::item {{ padding: 3px 0; }}

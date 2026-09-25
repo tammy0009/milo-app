@@ -504,6 +504,20 @@ class GraphView(QGraphicsView):
 
         self.hint = QLabel(self, objectName="GraphHint", alignment=Qt.AlignmentFlag.AlignCenter)
         self.hint.hide()
+        self.sidebar = None
+
+    def set_sidebar(self, sidebar: QWidget) -> None:
+        """Place the descriptor controls above the left edge of the graph canvas."""
+        self.sidebar = sidebar
+        sidebar.setParent(self)
+        sidebar.attach_canvas(self)
+        self._place_sidebar()
+        sidebar.show()
+        sidebar.raise_()
+
+    def _place_sidebar(self) -> None:
+        if self.sidebar is not None:
+            self.sidebar.setGeometry(0, 0, min(330, self.viewport().width()), self.viewport().height())
 
     # ---- data
 
@@ -584,6 +598,7 @@ class GraphView(QGraphicsView):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._place_sidebar()
         self._place_hint()
 
     def _add(self, node: Node) -> None:
@@ -730,6 +745,8 @@ class GraphView(QGraphicsView):
         zoom = self.transform().m11() * factor
         if 0.08 < zoom < 4:
             self.scale(factor, factor)
+            if self.sidebar is not None:
+                self.sidebar.schedule_glass()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self.itemAt(event.position().toPoint()) is None:

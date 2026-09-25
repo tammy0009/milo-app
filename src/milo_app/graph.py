@@ -249,6 +249,12 @@ def fingerprints(driver: Driver) -> dict[str, str]:
     return {r["path"]: r["fp"] for r in rows if r["path"]}
 
 
+def sources(driver: Driver) -> dict[str, str]:
+    """bundle_id -> the folder it was taken in from."""
+    rows, _, _ = driver.execute_query("MATCH (s:Simulation) RETURN s.bundle_id AS id, s.source_path AS path")
+    return {r["id"]: r["path"] for r in rows if r["path"]}
+
+
 def list_simulations(driver: Driver) -> list[dict[str, Any]]:
     rows, _, _ = driver.execute_query("MATCH (s:Simulation) RETURN properties(s) AS s ORDER BY s.start DESC")
     return [r["s"] for r in rows]
@@ -520,6 +526,9 @@ def remove_node(driver: Driver, node_id: str) -> None:
 
 
 def remove(driver: Driver, bundle_id: str) -> None:
+    """Take a run out of the graph: it, its values and files, and its blind test. Ghosts calculated from it
+    go at the next recalculation; verified ghosts stay, as history."""
+    driver.execute_query("MATCH (t:Test)-[:TESTED]->(:Simulation {bundle_id: $id}) DETACH DELETE t", id=bundle_id)
     driver.execute_query(
         "MATCH (s:Simulation {bundle_id: $id}) OPTIONAL MATCH (s)-[:HAS_INPUT|HAS_OUTPUT|HAS_FILE]->(n) "
         "DETACH DELETE s, n",

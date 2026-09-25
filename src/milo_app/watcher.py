@@ -2,7 +2,10 @@
 
 Every few seconds: find the bundle folders (bundle.json is written last, so only finished runs
 count), fingerprint each one (file count, total size, newest change), and ingest any that are new
-or changed. A bundle in a folder directly inside the drop folder (drop/<campaign>/<bundle_id>/) belongs
+or changed. The drop folder is the source of truth the other way too: a run whose folder is gone
+from it (and still gone at the next look, so a move or copy in progress never counts) is taken out of
+the graph. A run moved to another folder is taken in again from there, never removed.
+A bundle in a folder directly inside the drop folder (drop/<campaign>/<bundle_id>/) belongs
 to that campaign; moving it into or out of one takes it in again with its new campaign. A fingerprint has to hold still across two looks before it is ingested, so a bundle
 still being copied in from the VM is never read half-way.
 """
@@ -33,6 +36,7 @@ def fingerprint(folder: Path) -> str:
 class Watcher(QObject):
     ingested = Signal(str, str)  # bundle_id, title
     run_failed = Signal(str, str, str)  # bundle_id, title, error: a run that arrived failed
+    removed = Signal(list)  # titles of runs taken out because their folders left the drop folder
     failed = Signal(str, str)  # folder, error
     scanned = Signal(int)  # bundles seen in the drop folder
 
@@ -44,6 +48,7 @@ class Watcher(QObject):
         self._known: dict[str, str] = {}  # source_path -> fingerprint already in the graph
         self._pending: dict[str, str] = {}  # source_path -> fingerprint seen once, waiting to settle
         self._broken: dict[str, str] = {}  # source_path -> fingerprint that failed; retried when it changes
+        self._gone: set[str] = set()  # bundle_ids whose folder was missing at the last look
 
     def start(self) -> None:
         self._known = graph.fingerprints(self.driver)
@@ -72,12 +77,29 @@ class Watcher(QObject):
             log.exception("could not predict %s blind", bundle.bundle_id)
             return None
 
+    def _forget_missing(self, folders: list[Path]) -> None:
+        """Runs whose folder has left the drop folder, two looks in a row, leave the graph."""
+        present = {str(f) for f in folders}
+        drop = str(self.drop_dir.resolve())
+        missing = {bundle_id for bundle_id, path in graph.sources(self.driver).items()
+                   if path not in present and path.startswith(drop) and not Path(path).exists()}
+        gone, self._gone = missing & self._gone, missing - self._gone
+        if not gone:
+            return
+        titles = {s["bundle_id"]: s.get("title") or s["bundle_id"] for s in graph.list_simulations(self.driver)}
+        for bundle_id in sorted(gone):
+            graph.remove(self.driver, bundle_id)
+            log.info("removed %s: its folder left the drop folder", bundle_id)
+        self._known = graph.fingerprints(self.driver)
+        self.removed.emit([titles.get(b, b) for b in sorted(gone)])
+
     def _scan(self) -> None:
         if not self.drop_dir.is_dir():
             self.scanned.emit(0)
             return
         folders = find_bundles(self.drop_dir)
         self.scanned.emit(len(folders))
+        self._forget_missing(folders)
         for folder in folders:
             if self._stop.is_set():
                 return

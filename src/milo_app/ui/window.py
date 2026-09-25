@@ -22,7 +22,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -390,17 +390,13 @@ class MainWindow(QMainWindow):
         column.addWidget(self.types)
         column.addWidget(self.canvas, 1)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(self.descriptors)
-        split.addWidget(middle)
-        split.setSizes([270, 1170])
-        split.setStretchFactor(1, 1)
-        split.setChildrenCollapsible(False)
+        # The descriptors float over the graph so nodes remain visible through the glass.
+        self.canvas.set_sidebar(self.descriptors)
 
         self.formulas = FormulaView()
         self.formulas.recolored.connect(self._recolored)
         self.pages = QStackedWidget()
-        self.pages.addWidget(split)
+        self.pages.addWidget(middle)
         self.pages.addWidget(self.formulas)
 
         page = QWidget()
@@ -432,6 +428,7 @@ class MainWindow(QMainWindow):
         self.watcher = Watcher(self.driver, self.settings.drop_dir, self.settings.scan_seconds)
         self.watcher.ingested.connect(self.on_ingested)
         self.watcher.run_failed.connect(self.on_run_failed)
+        self.watcher.removed.connect(self.on_removed)
         self.watcher.failed.connect(lambda folder, err: self.statusBar().showMessage(f"Could not read {folder}: {err}"))
         self.watcher.scanned.connect(self._on_scanned)
         self.watcher.start()
@@ -629,6 +626,11 @@ class MainWindow(QMainWindow):
     def on_run_failed(self, bundle_id: str, title: str, error: str) -> None:
         """Say so straight away: a run that arrives failed."""
         self.statusBar().showMessage(f"{title} failed: {error}", 20000)
+
+    def on_removed(self, titles: list[str]) -> None:
+        """Runs whose folders were deleted from the drop folder have left the graph."""
+        self.reload()
+        self.statusBar().showMessage("Removed (folder deleted from the drop folder): " + ", ".join(titles), 12000)
 
     def on_ingested(self, bundle_id: str, title: str) -> None:
         self.reload()

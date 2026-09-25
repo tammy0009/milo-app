@@ -2,7 +2,9 @@
 
 A desktop app (Qt / PySide6) over a Neo4j graph of BIOVIA sim bundles. Open it and it brings up
 Docker and its database in the background, then keeps the graph in step with the drop folder:
-every finished bundle that lands in `C:\milo_drop` appears within seconds.
+every finished bundle that lands in `C:\milo_drop` appears within seconds, and a run whose folder
+is deleted from it leaves the graph (once it is still gone a few seconds later; moving a run to
+another folder inside the drop folder only re-files it).
 
 Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bundles like this:
 
