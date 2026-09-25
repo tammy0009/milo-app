@@ -48,84 +48,86 @@ my $bundle = MiloBundle->new(
 );
 my $status = "failed";
 eval {
-    # ================= INPUT: environment + requested parameters =================
-    $bundle->input("perl_version", sprintf("%vd", $^V));
-    $bundle->input("host", $ENV{COMPUTERNAME} || $ENV{HOSTNAME});
-    $bundle->input("accelrys_root", $ENV{ACCELRYS_ROOT} || $ENV{AccelrysRoot});
-    $bundle->input_file($0, "script.pl") if -f $0;
-    # every setting the user asked for is a requested.* input: the knobs MILO models and makes ghosts from.
-    # The title is only the run's label (bundle.json has it), so it is not one.
-    for my $key (sort keys %P) {
-        next if $key eq "parameters" || $key eq "title";
-        $bundle->input("requested.$key", $P{$key});
-    }
-    for my $parameter (@{$P{parameters}}) {
-        my ($name, $value, $units) = @$parameter;
-        $bundle->input("requested.$name", $value, $units);
-    }
-
-    # ================= INPUT: structure (optional) =================
-    my @structure_parameter;
-    if (length $P{input_molecule} || length $P{input_file}) {
-        my $document;
-        if (length $P{input_file}) {
-            die "input_file not found on this machine: $P{input_file}\n" unless -f $P{input_file};
-            $bundle->input_file($P{input_file}, "original_" . File::Basename::basename($P{input_file}));
-            $document = DiscoveryScript::Open({Path => $P{input_file}, LoadAllObjects => True});
+    # the whole run is timed, as in the Materials Studio scripts: a run that stops early still has its time
+    $bundle->timed(sub {
+        # ================= INPUT: environment + requested parameters =================
+        $bundle->input("perl_version", sprintf("%vd", $^V));
+        $bundle->input("host", $ENV{COMPUTERNAME} || $ENV{HOSTNAME});
+        $bundle->input("accelrys_root", $ENV{ACCELRYS_ROOT} || $ENV{AccelrysRoot});
+        $bundle->input_file($0, "script.pl") if -f $0;
+        # every setting the user asked for is a requested.* input: the knobs MILO models and makes ghosts from.
+        # The title is only the run's label (bundle.json has it), so it is not one.
+        for my $key (sort keys %P) {
+            next if $key eq "parameters" || $key eq "title";
+            $bundle->input("requested.$key", $P{$key});
         }
-        else {
-            # the saved 3D structure, every hydrogen included, exactly as it was saved
-            my $path = $bundle->molecule_file($P{input_molecule}, \%MILO_MOLECULES);
-            $document = DiscoveryScript::Open({Path => $path, LoadAllObjects => True});
+        for my $parameter (@{$P{parameters}}) {
+            my ($name, $value, $units) = @$parameter;
+            $bundle->input("requested.$name", $value, $units);
         }
-        if (length $P{forcefield}) {
-            (my $key = lc $P{forcefield}) =~ s/[^a-z0-9-]//g;
-            my $ff = $FORCEFIELDS{$key} or die "Unknown forcefield '$P{forcefield}'. Use one of: "
-                . join(", ", sort keys %FORCEFIELDS) . "\n";
-            my $charges = $CHARGES{lc $P{partial_charges}} or die "Unknown partial_charges '$P{partial_charges}'. Use one of: "
-                . join(", ", sort keys %CHARGES) . "\n";
-            my $forcefield = Ffdm::Document::Create($ff->());
-            my $typing = $forcefield->ApplyForceField($document, True, True, True, $charges->());
-            die "$P{forcefield} typing failed (status $typing)\n" unless $typing == Ffdm::applyForceFieldCompleted;
-            $forcefield->Save($bundle->input_path("forcefield.ffml"));
+
+        # ================= INPUT: structure (optional) =================
+        my @structure_parameter;
+        if (length $P{input_molecule} || length $P{input_file}) {
+            my $document;
+            if (length $P{input_file}) {
+                die "input_file not found on this machine: $P{input_file}\n" unless -f $P{input_file};
+                $bundle->input_file($P{input_file}, "original_" . File::Basename::basename($P{input_file}));
+                $document = DiscoveryScript::Open({Path => $P{input_file}, LoadAllObjects => True});
+            }
+            else {
+                # the saved 3D structure, every hydrogen included, exactly as it was saved
+                my $path = $bundle->molecule_file($P{input_molecule}, \%MILO_MOLECULES);
+                $document = DiscoveryScript::Open({Path => $path, LoadAllObjects => True});
+            }
+            if (length $P{forcefield}) {
+                (my $key = lc $P{forcefield}) =~ s/[^a-z0-9-]//g;
+                my $ff = $FORCEFIELDS{$key} or die "Unknown forcefield '$P{forcefield}'. Use one of: "
+                    . join(", ", sort keys %FORCEFIELDS) . "\n";
+                my $charges = $CHARGES{lc $P{partial_charges}} or die "Unknown partial_charges '$P{partial_charges}'. Use one of: "
+                    . join(", ", sort keys %CHARGES) . "\n";
+                my $forcefield = Ffdm::Document::Create($ff->());
+                my $typing = $forcefield->ApplyForceField($document, True, True, True, $charges->());
+                die "$P{forcefield} typing failed (status $typing)\n" unless $typing == Ffdm::applyForceFieldCompleted;
+                $forcefield->Save($bundle->input_path("forcefield.ffml"));
+            }
+            $bundle->input("structure_atom_count", $document->Atoms->Count);
+            $bundle->record_molecules("input_molecule", $document, "INPUT");
+            my $path = $bundle->input_path("input_structure.dsv");
+            $document->Save($path, "dsv");
+            @structure_parameter = ([$P{structure_parameter}, $path, undef]);
         }
-        $bundle->input("structure_atom_count", $document->Atoms->Count);
-        $bundle->record_molecules("input_molecule", $document, "INPUT");
-        my $path = $bundle->input_path("input_structure.dsv");
-        $document->Save($path, "dsv");
-        @structure_parameter = ([$P{structure_parameter}, $path, undef]);
-    }
 
-    # ================= INPUT: protocol + every parameter =================
-    my $session = Protocol::Document::DefaultSession()
-        or die "No Pipeline Pilot server connection. Connect Discovery Studio to its server and run again.\n";
-    $bundle->input("server", $bundle->safe($session, "Server"));
-    $bundle->input("server_user", $bundle->safe($session, "User"));
-    $bundle->input("max_download_mb", $P{max_download_mb}, "MB");
-    my $protocol = Protocol::Document::Create($P{protocol_name}, $session);
-    $bundle->input("protocol_version", $bundle->safe($protocol, "Version"));
-    $bundle->input("protocol_guid", $bundle->safe($protocol, "Guid"));
-    $bundle->apply_parameters($protocol, undef, [@structure_parameter, @{$P{parameters}}]);
+        # ================= INPUT: protocol + every parameter =================
+        my $session = Protocol::Document::DefaultSession()
+            or die "No Pipeline Pilot server connection. Connect Discovery Studio to its server and run again.\n";
+        $bundle->input("server", $bundle->safe($session, "Server"));
+        $bundle->input("server_user", $bundle->safe($session, "User"));
+        $bundle->input("max_download_mb", $P{max_download_mb}, "MB");
+        my $protocol = Protocol::Document::Create($P{protocol_name}, $session);
+        $bundle->input("protocol_version", $bundle->safe($protocol, "Version"));
+        $bundle->input("protocol_guid", $bundle->safe($protocol, "Guid"));
+        $bundle->apply_parameters($protocol, undef, [@structure_parameter, @{$P{parameters}}]);
 
-    # ================= RUN =================
-    my $task = $bundle->timed(sub {
+        # ================= RUN =================
+        my $launched = Time::HiRes::time();
         my $task = $session->Launch($protocol, $P{max_download_mb}, True, False);
         $task->WaitForCompletion();
-        return $task;
-    });
+        $bundle->output("protocol_time", Time::HiRes::time() - $launched, "s");
 
-    # ================= OUTPUT =================
-    my $files = $bundle->record_task(undef, $task);
-    my $state = $bundle->safe($task, "State");
-    my $ok = defined $state && $state eq Protocol::taskComplete && $bundle->safe($task, "IsProtocolSuccessful");
-    for my $rel (grep { /\.(dsv|msv|sd|sdf|mol|mol2|pdb)$/i } @$files) {
-        my $result = eval { DiscoveryScript::Open({Path => $task->RunPath . "/" . $rel, LoadAllObjects => True}) };
-        if (!$result) { $bundle->output("unreadable.$rel", "$@"); next }
-        (my $label = $rel) =~ s{\.\w+$}{};
-        $label =~ s{^Output/}{};
-        $bundle->record_molecules("result.$label", $result);
-    }
-    $status = $ok ? "succeeded" : "failed";
+        # ================= OUTPUT =================
+        my $files = $bundle->record_task(undef, $task);
+        my $state = $bundle->safe($task, "State");
+        my $ok = defined $state && $state eq Protocol::taskComplete && $bundle->safe($task, "IsProtocolSuccessful");
+        for my $rel (grep { /\.(dsv|msv|sd|sdf|mol|mol2|pdb)$/i } @$files) {
+            my $result = eval { DiscoveryScript::Open({Path => $task->RunPath . "/" . $rel, LoadAllObjects => True}) };
+            if (!$result) { $bundle->output("unreadable.$rel", "$@"); next }
+            (my $label = $rel) =~ s{\.\w+$}{};
+            $label =~ s{^Output/}{};
+            $bundle->record_molecules("result.$label", $result);
+        }
+        $status = $ok ? "succeeded" : "failed";
+    });
     1;
 } or do {
     $bundle->record_error($@);

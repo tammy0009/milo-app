@@ -246,10 +246,7 @@ sub apply_parameters {
     for my $parameter (@$parameters) {
         my ($name, $value, $units) = @$parameter;
         die "MILO: protocol has no parameter '$name'\n" unless $protocol->ItemExists($name);
-        # Discovery Studio takes a Boolean as its True/False constants, not the words
-        my $given = $value;
-        $given = lc $value eq "true" ? main::True() : main::False()
-            if defined $value && !ref $value && $value =~ /^(true|false)$/i;
+        my $given = $self->_as_parameter_type($protocol, $name, $value);
         eval { $protocol->ReplaceItem($name, $given); 1 } or do {
             my ($error, $type, $default) = ($@, $self->safe($protocol, "ParameterType", $name), $self->safe($protocol, "Item", $name));
             $error =~ s/\s+at \S+ line \d+.*//s;
@@ -264,6 +261,23 @@ sub apply_parameters {
     File::Path::make_path(File::Basename::dirname($xml));
     push @names, "$folder/milo_protocol_$label.xml" if eval { $protocol->Save($xml, "pr_xml"); -f $xml };
     $self->input(_prefixed($stage, "settings_dump"), \@names);
+}
+
+# A value as the protocol parameter's own type (ParameterType): Discovery Studio refuses the words
+# "True"/"False" for a BoolType (it takes its True/False constants) and a Perl integer such as 7 for a
+# DoubleType (it takes a real number), both seen on the VM with no message.
+sub _as_parameter_type {
+    my ($self, $protocol, $name, $value) = @_;
+    return $value if !defined $value || ref $value;
+    my $type = $self->safe($protocol, "ParameterType", $name) // "";
+    my $number = Scalar::Util::looks_like_number($value);
+    if ($type =~ /^Bool/i || $value =~ /^(true|false)$/i) {
+        my $on = $number ? $value != 0 : lc $value eq "true";
+        return $on ? main::True() : main::False() if $number || $value =~ /^(true|false)$/i;
+    }
+    return unpack("d", pack("d", $value)) if $type =~ /^Double/i && $number;  # a real number, never an integer
+    return int($value) if $type =~ /^Long/i && $number && $value == int($value);
+    return $value;
 }
 
 # Every parameter of a protocol as it stands (name, type, value) into INPUT/files/<rel>; returns [rel] or ().

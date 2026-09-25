@@ -2,11 +2,13 @@
 #
 # It does NOT simulate anything; it only mimics the API surface MILO scripts touch (documents, molecules,
 # forcefield typing, protocol documents/sessions/tasks), so script logic and bundle writing can be tested
-# without BIOVIA. Any protocol name is accepted: known ones (Minimization) have their real parameter
-# list, unknown ones accept any parameter. Any other *DiscoveryScript / *Commands module "loads" as this one.
+# without BIOVIA. Any protocol name is accepted: known ones (Minimization, Prepare Proteins) have their
+# parameter list and refuse wrongly typed values the way the real one does; unknown ones accept any
+# parameter. Any other *DiscoveryScript / *Commands module "loads" as this one.
 package DiscoveryScript;
 use strict;
 use warnings;
+use B ();
 use Cwd ();
 use File::Basename ();
 use File::Path ();
@@ -220,15 +222,47 @@ sub LaunchProtocol {
 # The real parameter lists of the protocols MILO scripts use (defaults as a fresh protocol document shows them).
 our %KNOWN = (
     "Minimization" => [
-        ["Input Typed Molecule", "", "Mdm::Molecule"], ["Minimization Algorithm", "Smart Minimizer", "String"],
-        ["Minimization Max Steps", 200, "Integer"], ["Minimization RMS Gradient", 0.1, "Real"],
-        ["Minimization Energy Change", 0.0, "Real"], ["Minimization Save Results Frequency", 0, "Integer"],
-        ["Implicit Solvent Model", "None", "String"], ["Dielectric Constant", 1, "Real"],
-        ["Nonbond List Radius", 14, "Real"], ["Electrostatics", "Automatic", "String"],
+        ["Input Typed Molecule", "", "Mdm::Molecule"], ["Minimization Algorithm", "Smart Minimizer", "StringType"],
+        ["Minimization Max Steps", 200, "LongType"], ["Minimization RMS Gradient", 0.1, "DoubleType"],
+        ["Minimization Energy Change", 0.0, "DoubleType"], ["Minimization Save Results Frequency", 0, "LongType"],
+        ["Implicit Solvent Model", "None", "StringType"], ["Dielectric Constant", 1, "DoubleType"],
+        ["Nonbond List Radius", 14, "DoubleType"], ["Electrostatics", "Automatic", "StringType"],
     ],
     "Calculate Energy" => [
-        ["Input Typed Molecule", "", "Mdm::Molecule"], ["Implicit Solvent Model", "None", "String"],
-        ["Dielectric Constant", 1, "Real"], ["Electrostatics", "Automatic", "String"],
+        ["Input Typed Molecule", "", "Mdm::Molecule"], ["Implicit Solvent Model", "None", "StringType"],
+        ["Dielectric Constant", 1, "DoubleType"], ["Electrostatics", "Automatic", "StringType"],
+    ],
+    # The real list, types and defaults, as Discovery Studio 2026 dumped them on the VM (Savinase pH run,
+    # 2026-09-25). The type names (BoolType, DoubleType, LongType, StringType) are the real ones.
+    "Prepare Proteins" => [
+        ["Advanced", "", "GroupType"],
+        ["Build Loops", 1, "BoolType"],
+        ["Disulfide Bridges", "", "StringType"],
+        ["Energy Cutoff", 0.9, "DoubleType"],
+        ["Flexible Stem Residues", 0, "LongType"],
+        ["Forcefield", "CHARMm", "StringType"],
+        ["Input Protein Molecules", "shortcut:/Discovery Studio Data/data/PDB/1ACC.pdb", "ProteinsType"],
+        ["Ionic Strength", 0.145, "DoubleType"],
+        ["Keep Ligands", 1, "BoolType"],
+        ["Keep Water", "None", "StringType"],
+        ["Loop Definition", "SEQRES", "StringType"],
+        ["Loop List", "", "StringType"],
+        ["Maximal Loop Length", 20, "LongType"],
+        ["Parallel Processing", 0, "BoolType"],
+        ["Parallel Processing Batch Size", 1, "LongType"],
+        ["Parallel Processing Preserve Order", 1, "BoolType"],
+        ["Parallel Processing Server", "localhost", "StringType"],
+        ["Parallel Processing Server Processes", "2", "StringType"],
+        ["Parallel Processing Server Run On Grid", 1, "BoolType"],
+        ["Parallel Processing Server Run On Grid Queue Name", "", "StringType"],
+        ["Protein Dielectric Constant", 10, "DoubleType"],
+        ["Protonate", 1, "BoolType"],
+        ["Reporting", "", "GroupType"],
+        ["Reporting Stylesheet", "{42691EC8-0CE0-4DB9-8B3C-5379CBB967A7}", "StylesheetType"],
+        ["Use CHARMm Minimization", 1, "BoolType"],
+        ["Use Looper", 0, "BoolType"],
+        ["Use Looper Maximal Loop Length", 12, "LongType"],
+        ["pH for Protonation", 7.4, "DoubleType"],
     ],
 );
 
@@ -280,11 +314,19 @@ sub Version { 1 }
 sub ParameterMap { $_[0]{map} }
 sub ItemExists { my ($self, $k) = @_; return $self->{known} ? $self->{map}->ItemExists($k) : 1 }
 sub Item { $_[0]{map}->Item($_[1]) }
-sub ParameterType { $_[0]{types}{$_[1]} || "String" }
+sub ParameterType { $_[0]{types}{$_[1]} || "StringType" }
 sub ReplaceItem {
     my ($self, $k, $v) = @_;
     ($k, $v) = ($k->{Key}, exists $k->{Value} ? $k->{Value} : $k->{Parameter}) if ref $k;
     die "Protocol '$self->{name}' has no parameter '$k'\n" unless $self->ItemExists($k);
+    # Refused as the real one refuses (seen on the VM, both with no message): a word such as "False" for a
+    # BoolType, and a Perl integer such as 7 (no real-number value) for a DoubleType.
+    my $type = $self->ParameterType($k);
+    if (defined $v && !ref $v) {
+        my $flags = B::svref_2object(\$v)->FLAGS;
+        die "\n" if $type eq "BoolType" && !($flags & (B::SVf_IOK() | B::SVf_NOK()));
+        die "\n" if $type eq "DoubleType" && ($flags & B::SVf_IOK()) && !($flags & B::SVf_NOK());
+    }
     $self->{map}->ReplaceItem($k, $v);
 }
 sub Save {
