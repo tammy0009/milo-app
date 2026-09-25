@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import datetime
 from typing import Any
 
 
@@ -16,6 +17,24 @@ def elapsed(sim: dict[str, Any]) -> str:
         m, s = divmod(rest, 60)
         return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
     return f"{value:g} {units}"
+
+
+def landed(sim: dict[str, Any]) -> str:
+    """When a run landed, for sorting: its finish (bundle.json is written last, so that is when the
+    bundle appeared), else its start, else when MILO took it in."""
+    return str(sim.get("finish") or sim.get("start") or sim.get("ingested_at") or "")
+
+
+def when(stamp: str) -> str:
+    """An ISO time as it reads here, in local time: "Sep 24, 9:11 PM"."""
+    try:
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return stamp or ""
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()
+    hour = moment.hour % 12 or 12
+    return f"{moment:%b} {moment.day}, {hour}:{moment:%M} {'AM' if moment.hour < 12 else 'PM'}"
 
 
 def shown_value(row: dict[str, Any]) -> tuple[str, str]:

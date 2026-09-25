@@ -338,6 +338,7 @@ class MainWindow(QMainWindow):
 
         self.descriptors = DescriptorPanel()
         self.descriptors.changed.connect(lambda _keys: self.redraw())
+        self.descriptors.sims_changed.connect(self.redraw)
 
         self.types = TypeBar()
         self.types.changed.connect(self.redraw)
@@ -426,6 +427,7 @@ class MainWindow(QMainWindow):
         """The data or its calculation changed: refresh everything that shows it. (Ticking a
         descriptor only needs redraw().)"""
         self.descriptors.set_groups(graph.descriptor_groups(self.driver))
+        self.descriptors.set_sims(graph.list_simulations(self.driver))
         self.redraw()
         self.formulas.set_data(graph.descriptor_table(self.driver), graph.list_relationships(self.driver), self._titles)
         self.formulas.set_track(graph.list_tests(self.driver))
@@ -458,14 +460,17 @@ class MainWindow(QMainWindow):
         for m in graph.list_models(self.driver):
             for alias in m.get("aliases") or [m["descriptor"]]:
                 self._models.setdefault(alias, []).append(m)
-        nodes = [{"id": s["bundle_id"], "kind": "sim", "sim": s} for s in sims]
+        # The Sim Feed says which runs are on the graph; the rest, and their ghosts, are left off.
+        shown_sims = {s["bundle_id"] for s in sims} - self.descriptors.hidden_sims
+        nodes = [{"id": s["bundle_id"], "kind": "sim", "sim": s} for s in sims if s["bundle_id"] in shown_sims]
         links: list[dict] = []
 
         descriptor_ids: dict[str, list[str]] = {}
         for key in self.descriptors.active:
             color = self.descriptors.color_of(key)
-            made = self._descriptor_nodes(key, color)
-            descriptor_ids[key] = [n["id"] for n, _ in made]
+            made = self._descriptor_nodes(key, color, shown_sims)
+            if made:
+                descriptor_ids[key] = [n["id"] for n, _ in made]
             for node, sim_ids in made:
                 nodes.append(node)
                 links += [{"a": node["id"], "b": s, "color": color} for s in sim_ids]
@@ -483,6 +488,8 @@ class MainWindow(QMainWindow):
                            "alpha": 200} for d in descriptor_ids[key]]
 
         for pred in predictions:
+            if not set(pred["based_on"]) & shown_sims:
+                continue  # its runs are unchecked in the Sim Feed
             pred_id = "pred:" + pred["id"]
             nodes.append({"id": pred_id, "kind": "prediction", "pred": pred})
             links += [{"a": pred_id, "b": s, "color": theme.GRAPH["ghost_line"], "style": "dashed", "alpha": 200}
@@ -497,18 +504,22 @@ class MainWindow(QMainWindow):
             hints.append("No descriptors checked: check fields in the list on the left")
         if "relationship" in shown and len(self.descriptors.active) == 1:
             hints.append("Check a second descriptor to see the relationships between them")
+        if sims and not shown_sims:
+            hints.append("Every run is unchecked in the Sim Feed")
         if not shown:
             hints.append("Every kind of node is switched off: turn some on in the Show bar")
         self.canvas.set_hint("   ·   ".join(hints))
         self.status.setText(f"{sum(counts[k] for k in shown)} nodes shown")
 
-    def _descriptor_nodes(self, key: str, color: str) -> list[tuple[dict, list[str]]]:
+    def _descriptor_nodes(self, key: str, color: str, shown_sims: set[str]) -> list[tuple[dict, list[str]]]:
         """One node per value of the group as it reads on screen ("Density = 1 g/cm^3"), each with
         the simulations that have it. Values that only differ past the shown digits (1.0000009 and
         1.0000011) read the same, so they share a node; the exact values stay in its details."""
         name = key.partition(":")[2]
         shown: dict[str, tuple[list[str], list[str]]] = {}  # label -> (sim ids, exact values)
         for value_json, units, bundle_id in graph.descriptor_links(self.driver, key):
+            if bundle_id not in shown_sims:
+                continue
             label = f"{pretty_name(name)} = {quantity(value_json, units)}"
             sims, exact = shown.setdefault(label, ([], []))
             sims.append(bundle_id)

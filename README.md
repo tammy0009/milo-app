@@ -117,6 +117,8 @@ Which descriptors appear is chosen with the check boxes in the left sidebar: eve
 field, input, and output is listed there, so a new field (e.g. `campaign`) shows up the moment a
 bundle has it. Each distinct value is its own node ("time_elapsed = 3.78 min"), linked to the
 sims that have that value.
+Under the fields, the **Sim Feed** lists every run, newest first, by title and the time it landed
+(its finish time). Uncheck a run to take it and its ghosts off the graph; new runs arrive checked.
 A relationship pulls in its two descriptors even if they are not checked (in grey). What you
 check is remembered between launches.
 
