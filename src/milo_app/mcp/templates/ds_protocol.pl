@@ -53,9 +53,15 @@ eval {
     $bundle->input("host", $ENV{COMPUTERNAME} || $ENV{HOSTNAME});
     $bundle->input("accelrys_root", $ENV{ACCELRYS_ROOT} || $ENV{AccelrysRoot});
     $bundle->input_file($0, "script.pl") if -f $0;
+    # every setting the user asked for is a requested.* input: the knobs MILO models and makes ghosts from.
+    # The title is only the run's label (bundle.json has it), so it is not one.
     for my $key (sort keys %P) {
-        next if $key eq "parameters";
+        next if $key eq "parameters" || $key eq "title";
         $bundle->input("requested.$key", $P{$key});
+    }
+    for my $parameter (@{$P{parameters}}) {
+        my ($name, $value, $units) = @$parameter;
+        $bundle->input("requested.$name", $value, $units);
     }
 
     # ================= INPUT: structure (optional) =================

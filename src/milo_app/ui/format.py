@@ -87,14 +87,14 @@ def quantity(value_json: str, units: str | None) -> str:
 ACRONYMS = {
     "pla": "PLA", "pcl": "PCL", "npt": "NPT", "nvt": "NVT", "nve": "NVE", "cpu": "CPU", "gpu": "GPU",
     "id": "ID", "md": "MD", "dft": "DFT", "rms": "RMS", "xsd": "XSD", "milo": "MILO", "vdw": "vdW",
-    "tg": "Tg", "ff": "FF",
+    "tg": "Tg", "ff": "FF", "ph": "pH",
 }
 # A last word that is really a unit becomes one in brackets: "temperature_k" -> "Temperature (K)".
 UNIT_WORDS = {"k": "(K)", "gpa": "(GPa)", "mpa": "(MPa)", "min": "(min)", "s": "(s)", "ps": "(ps)", "fs": "(fs)"}
 
 
 def pretty_name(raw: str) -> str:
-    text = raw.replace("VdW", "Vdw")
+    text = re.sub(r"\bpH\b", "ph", raw.replace("VdW", "Vdw"))  # "pH" is not CamelCase
     text = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", text)  # CamelCase -> Camel Case
     words = [w for w in re.split(r"[._\s-]+", text) if w]
     out = []

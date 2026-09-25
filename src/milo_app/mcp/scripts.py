@@ -64,7 +64,7 @@ SCRIPTS: dict[str, dict[str, Any]] = {
         "description": "Any Discovery Studio protocol, by name: optional input structure (input_molecule: a "
         "molecule saved in MILO's molecule memory, copied in exactly; or input_file: a file on the VM) "
         "typed with a forcefield and passed as structure_parameter, every requested protocol parameter applied "
-        "(unknown names stop the run), the protocol's full parameter set dumped into INPUT, then every file in "
+        "(unknown names stop the run) and recorded as requested.<name> (the knobs MILO models), the protocol's full parameter set dumped into INPUT, then every file in "
         "the run folder and every property of every result molecule recorded as OUTPUT. "
         'parameters: {"Protocol Parameter Name": value} or {name: [value, "units"]}; look the exact names '
         'up with milo_search_docs ("<protocol> - Parameters"). forcefield "" skips typing.',
