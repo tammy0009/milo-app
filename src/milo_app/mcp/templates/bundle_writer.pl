@@ -236,18 +236,40 @@ sub _prefixed { my ($stage, $name) = @_; return defined $stage && length $stage 
 # Apply parameters to a Protocol::Document, record each one as an INPUT, and dump the protocol's FULL
 # parameter set (every default the run used, not only the ones changed) into INPUT/files/settings/.
 # parameters: [[name, value, units], ...]. An unknown parameter name dies: a silently ignored typo
-# would mean the bundle claims an input the run never used.
+# would mean the bundle claims an input the run never used. The protocol's own parameters (types and
+# defaults) are dumped first, so a run that stops on a refused setting still shows what it accepts.
 sub apply_parameters {
     my ($self, $protocol, $stage, $parameters) = @_;
+    my $label = defined $stage && length $stage ? $stage : "run";
+    my $folder = defined $stage && length $stage ? "settings/$stage" : "settings";
+    my @names = $self->_dump_parameters($protocol, "$folder/milo_parameters_${label}_defaults.tsv");
     for my $parameter (@$parameters) {
         my ($name, $value, $units) = @$parameter;
         die "MILO: protocol has no parameter '$name'\n" unless $protocol->ItemExists($name);
-        $protocol->ReplaceItem($name, $value);
+        # Discovery Studio takes a Boolean as its True/False constants, not the words
+        my $given = $value;
+        $given = lc $value eq "true" ? main::True() : main::False()
+            if defined $value && !ref $value && $value =~ /^(true|false)$/i;
+        eval { $protocol->ReplaceItem($name, $given); 1 } or do {
+            my ($error, $type, $default) = ($@, $self->safe($protocol, "ParameterType", $name), $self->safe($protocol, "Item", $name));
+            $error =~ s/\s+at \S+ line \d+.*//s;
+            die "MILO: Discovery Studio refused protocol parameter '$name' = '$value' (its type: "
+                . ($type // "unknown") . ", its default: " . ($default // "unknown") . "): "
+                . (length $error ? $error : "no message") . "\n";
+        };
         $self->input(_prefixed($stage, $name), $value, $units);
     }
-    my $label = defined $stage && length $stage ? $stage : "run";
-    my $folder = defined $stage && length $stage ? "settings/$stage" : "settings";
-    my (@dump, @names);
+    push @names, $self->_dump_parameters($protocol, "$folder/milo_parameters_$label.tsv");
+    my $xml = $self->input_path("$folder/milo_protocol_$label.xml");
+    File::Path::make_path(File::Basename::dirname($xml));
+    push @names, "$folder/milo_protocol_$label.xml" if eval { $protocol->Save($xml, "pr_xml"); -f $xml };
+    $self->input(_prefixed($stage, "settings_dump"), \@names);
+}
+
+# Every parameter of a protocol as it stands (name, type, value) into INPUT/files/<rel>; returns [rel] or ().
+sub _dump_parameters {
+    my ($self, $protocol, $rel) = @_;
+    my @dump;
     my $map = $self->safe($protocol, "ParameterMap");
     my $key = $self->safe($map, "FirstKey");
     while (defined $key && length $key) {
@@ -256,14 +278,9 @@ sub apply_parameters {
         push @dump, "$key\t" . (defined $type ? $type : "") . "\t" . (defined $value ? "$value" : "");
         $key = $self->safe($map, "NextKey", $key);
     }
-    if (@dump) {
-        $self->write_text("INPUT", "$folder/milo_parameters_$label.tsv", join("\n", "name\ttype\tvalue", @dump) . "\n");
-        push @names, "$folder/milo_parameters_$label.tsv";
-    }
-    my $xml = $self->input_path("$folder/milo_protocol_$label.xml");
-    File::Path::make_path(File::Basename::dirname($xml));
-    push @names, "$folder/milo_protocol_$label.xml" if eval { $protocol->Save($xml, "pr_xml"); -f $xml };
-    $self->input(_prefixed($stage, "settings_dump"), \@names);
+    return () unless @dump;
+    $self->write_text("INPUT", $rel, join("\n", "name\ttype\tvalue", @dump) . "\n");
+    return ($rel);
 }
 
 # Record every property Discovery Studio defines on an object (PropertyNames), skipping ones it can't read.
