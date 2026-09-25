@@ -4,7 +4,7 @@ A desktop app (Qt / PySide6) over a Neo4j graph of BIOVIA sim bundles. Open it a
 Docker and its database in the background, then keeps the graph in step with the drop folder:
 every finished bundle that lands in `C:\milo_drop` appears within seconds.
 
-Script writing stays with the MILO MCP in `..\milo`. It still writes the same bundles:
+Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bundles like this:
 
 ```
 <bundle_id>/
@@ -49,7 +49,7 @@ data, and the next launch finds them already up.
 | `src/milo_app/blind.py` | Blind tests: every new run predicted before it is added, then checked |
 | `src/milo_app/mcp/` | The MILO MCP: script writing, docs search, script checks, graph tools |
 | `src/milo_app/services.py` | Starts Docker (clearing the stale socket files that block it) and Neo4j |
-| `src/milo_app/bundle.py` | Reads a bundle folder: the ingestion contract, copied from `..\milo` |
+| `src/milo_app/bundle.py` | Reads a bundle folder: the ingestion contract |
 | `.env` | Database address and password, drop folder, scan interval |
 | `compose.yaml` | The database container: `milo-app-neo4j`, its own volume |
 
