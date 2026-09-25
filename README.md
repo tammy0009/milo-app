@@ -13,10 +13,27 @@ Scripts are written by the MILO MCP (`src/milo_app/mcp/`, below). They write bun
   bundle.json           (written last: its presence means the run is finished)
 ```
 
+## What you need
+
+- **Windows 10 or 11.** The app starts Docker Desktop itself from its standard install folder.
+- **Docker Desktop**: MILO's database runs in it (the `neo4j:5.26` image downloads on first start).
+- **uv** (https://docs.astral.sh/uv/): installs Python 3.12+ and every library listed in `uv.lock`.
+- **Git**, and access to this repo (it is private).
+
+Only for the MILO MCP:
+
+- **Claude Code**, to use the MCP.
+- **BIOVIA documentation dumps**, for docs search. They are not in the repo: point `MILO_DOCS_DIR`
+  at them, then build the index once with `milo_index_docs`.
+- **Perl**, for checking Discovery Studio scripts. Git for Windows already includes it.
+- **BIOVIA itself** (Materials Studio / Discovery Studio), to run the scripts and make bundles.
+
+A fresh copy starts with an empty graph. It fills as bundles land in the drop folder.
+
 ## Run it
 
 ```powershell
-copy .env.example .env           # once: then set the database password in .env
+copy .env.example .env           # once: then set the database password and folders in .env
 uv sync
 .\scripts\install-shortcut.ps1   # once: MILO icon on the Desktop and in the Start menu
 uv run milo-app                  # or run it from a terminal
@@ -115,7 +132,7 @@ they go to the VM, and reads and adds to this app's graph (`milo_graph_data`, `m
 `milo_remove_prediction`). It is a local stdio server; Claude Code runs it with:
 
 ```powershell
-claude mcp add milo -s user -- C:\Users\jroma\.local\bin\uv.exe --directory C:\Users\jroma\cra\milo-app run milo-mcp
+claude mcp add milo -s user -- uv --directory C:\path\to\milo-app run milo-mcp
 ```
 
 Its docs index (`data/docs.sqlite`, rebuilt with `milo_index_docs` from `MILO_DOCS_DIR`) and the scripts
