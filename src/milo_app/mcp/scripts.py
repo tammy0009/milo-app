@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from milo_app.config import get_settings
+from milo_app.mcp import molecules as molecule_memory
 
 TEMPLATES = Path(__file__).parent / "templates"
 HARNESS_DS = Path(__file__).parent / "harness_ds"  # fake DiscoveryScript, so `use MdmDiscoveryScript;` resolves
@@ -59,7 +60,8 @@ SCRIPTS: dict[str, dict[str, Any]] = {
         "template": "ds_protocol.pl",
         "product": "Discovery Studio",
         "language": "perl",
-        "description": "Any Discovery Studio protocol, by name: optional input structure (SMILES, or a file on the VM) "
+        "description": "Any Discovery Studio protocol, by name: optional input structure (input_molecule: a "
+        "molecule saved in MILO's molecule memory, copied in exactly; or input_file: a file on the VM) "
         "typed with a forcefield and passed as structure_parameter, every requested protocol parameter applied "
         "(unknown names stop the run), the protocol's full parameter set dumped into INPUT, then every file in "
         "the run folder and every property of every result molecule recorded as OUTPUT. "
@@ -68,7 +70,7 @@ SCRIPTS: dict[str, dict[str, Any]] = {
         "params": {
             "protocol_name": "Minimization",
             "parameters": {"Minimization Algorithm": "Smart Minimizer", "Minimization Max Steps": 2000},
-            "input_smiles": "",
+            "input_molecule": "",
             "input_file": "",
             "structure_parameter": "Input Typed Molecule",
             "forcefield": "CHARMm",
@@ -108,7 +110,13 @@ BUNDLE_CONTRACT = {
         "bundle.record_properties(stage, obj, properties, units=None, default_units=None)  # any property list",
         "bundle.safe(obj, attr)  # getattr that never raises: BIOVIA leaves properties undefined",
         "stage=None writes unprefixed names; stage='NPT' writes 'NPT.Temperature'",
+        "path = bundle.molecule_file(name, MILO_MOLECULES)  # a molecule from MILO's molecule memory, checksum "
+        "checked, written into INPUT/files/molecules/ and recorded; then doc = Documents.Import(path)",
     ],
+    "molecules": "never type a structure into a script. Save it once (milo_save_molecule), then put a "
+    "MILO_MOLECULES = {{MOLECULES}} line in the script (Perl: my %MILO_MOLECULES = {{MOLECULES}};) and "
+    "milo_check_script(..., molecules=[names]) fills it in exactly. The writers check each molecule's checksum "
+    "on the VM before using it.",
     "helpers_on_the_bundle_perl": [
         "$bundle->apply_parameters($protocol, $stage, [[name, value, units], ...])  # ReplaceItem each one (unknown "
         "names die), record each as INPUT, dump the protocol's FULL parameter set into INPUT/files/settings/",
@@ -116,6 +124,8 @@ BUNDLE_CONTRACT = {
         "$bundle->record_molecules($stage, $mdm_document, 'OUTPUT'|'INPUT')  # every property of every molecule",
         "$bundle->record_properties($stage, $obj, $names_or_undef, {name => units})  # any object's PropertyNames",
         "$bundle->safe($obj, 'Method', @args)  # method call that never dies",
+        "my $path = $bundle->molecule_file($name, \\%MILO_MOLECULES)  # a molecule from MILO's molecule memory, "
+        "checksum checked, written into INPUT/files/molecules/ and recorded; then DiscoveryScript::Open({Path => $path})",
         "MiloBundle::text($value)  # force a JSON string for a value that looks like a number",
     ],
     "checked_by": "milo_check_script runs the script against a fake BIOVIA and verifies the bundle it writes",
@@ -210,7 +220,14 @@ def check_python_syntax(script: str) -> dict[str, Any]:
 
 
 def list_scripts() -> dict[str, Any]:
-    return {kind: {k: v for k, v in spec.items() if k != "template"} for kind, spec in SCRIPTS.items()}
+    """Every script and its parameters. Every parameter is required: the values shown are suggestions to
+    offer the user, never filled in silently."""
+    listed = {}
+    for kind, spec in SCRIPTS.items():
+        entry = {k: v for k, v in spec.items() if k not in ("template", "params")}
+        entry["params_all_required"] = spec["params"]
+        listed[kind] = entry
+    return listed
 
 
 def _merge_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -219,6 +236,12 @@ def _merge_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
     unknown = set(params) - set(defaults)
     if unknown:
         raise ValueError(f"Unknown parameters for {kind}: {sorted(unknown)}. Allowed: {sorted(defaults)}")
+    missing = [k for k in defaults if k not in params]
+    if missing:
+        raise ValueError(
+            f"Every input must come from the user, and these were not given for {kind}: "
+            + "; ".join(f"{k} (suggested: {defaults[k]!r})" for k in missing)
+            + ". Ask the user for each one. If they want a suggested value, pass it explicitly.")
     merged = dict(defaults)
     for key, value in params.items():
         default = defaults[key]
@@ -233,8 +256,8 @@ def _merge_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
             value, units = value if isinstance(value, (list, tuple)) and len(value) == 2 else (value, None)
             rows.append([name, value, units])
         merged["parameters"] = rows
-        if merged["input_smiles"] and merged["input_file"]:
-            raise ValueError("give input_smiles or input_file, not both")
+        if merged["input_molecule"] and merged["input_file"]:
+            raise ValueError("give input_molecule or input_file, not both")
     if kind == "ms_pla_pcl_amorphous_cell":
         if not 0 < merged["pla_mass_fraction"] < 1:
             raise ValueError("pla_mass_fraction must be between 0 and 1")
@@ -243,9 +266,58 @@ def _merge_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
     return merged
 
 
+def campaign_choice(campaign: str | None) -> str | None:
+    """The user's answer to "is this part of a campaign?": a name, or "none". Anything else means the
+    question was not asked."""
+    answer = (campaign or "").strip()
+    if not answer:
+        raise ValueError('No campaign answer: ask the user whether these runs are part of a campaign (a new one '
+                         'they name, or an existing one from milo_list_campaigns), then pass the name, or "none" '
+                         "if they are not")
+    return None if answer.lower() == "none" else answer
+
+
+def perl_dq(text: str) -> str:
+    """A Perl double-quoted string that holds `text` exactly on one line (newlines as \\n)."""
+    out = []
+    for ch in text:
+        if ch in '\\"$@':
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif " " <= ch <= "~":
+            out.append(ch)
+        else:
+            out.append("\\x{%x}" % ord(ch))
+    return '"' + "".join(out) + '"'
+
+
+def molecules_literal(entries: dict[str, dict[str, Any]], language: str) -> str:
+    """MILO_MOLECULES as a Python dict or a Perl hash list, every structure character for character."""
+    if language == "python":
+        return repr(entries)
+    rows = []
+    for name, entry in entries.items():
+        fields = ", ".join(f"{key} => {perl_dq(str(value))}" for key, value in entry.items() if value is not None)
+        rows.append(f"    {perl_dq(name)} => {{{fields}}},\n")
+    return "(\n" + "".join(rows) + ")" if rows else "()"
+
+
+def fill_molecules(script: str, names: list[str], language: str, product: str) -> str:
+    """Put the named molecules into a script's MILO_MOLECULES placeholder ({{MOLECULES}})."""
+    entries = molecule_memory.for_script(names, product)
+    if names and "{{MOLECULES}}" not in script:
+        raise ValueError("the script has no MILO_MOLECULES = {{MOLECULES}} line (Perl: my %MILO_MOLECULES = "
+                         "{{MOLECULES}};) for the molecules to go in")
+    return script.replace("{{MOLECULES}}", molecules_literal(entries, language))
+
+
 def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm: str | None = None,
                     campaign: str | None = None) -> dict[str, Any]:
-    """campaign: the campaign the run belongs to, or None / "" for a run that is not part of one."""
+    """campaign: the user's answer, a campaign name or "none" (campaign_choice)."""
+    campaign = campaign_choice(campaign)
     if kind not in SCRIPTS:
         raise ValueError(f"Unknown script '{kind}'. Available: {', '.join(SCRIPTS)}")
     spec = SCRIPTS[kind]
@@ -254,7 +326,14 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
     bundle_id = str(uuid.uuid4())
     drop = drop_dir_vm or settings.drop_dir_vm
     language = spec["language"]
-    campaign = (campaign or "").strip() or None
+    product = "discovery_studio" if spec["product"] == "Discovery Studio" else "materials_studio"
+    if merged.get("input_molecule"):
+        found = molecule_memory.find(merged["input_molecule"])
+        if found is None:
+            raise ValueError(f"no molecule '{merged['input_molecule']}' in MILO's molecule memory: save it first "
+                             "(milo_save_molecule)")
+        merged["input_molecule"] = found["name"]  # its saved name: the key it has in MILO_MOLECULES
+    wanted = [merged["input_molecule"]] if merged.get("input_molecule") else []
 
     if language == "perl":
         # Perl single-quoted strings turn "\\" into "\": escape the drop path so UNC paths survive.
@@ -277,6 +356,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         .replace("{{TITLE}}", str(title).replace("\n", " "))
         .replace("{{CAMPAIGN}}", perl_literal(campaign) if language == "perl" else repr(campaign))
     )
+    script = fill_molecules(script, wanted, language, product)
     out_dir = settings.data_dir / "generated_scripts"
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = out_dir / f"{kind}_{bundle_id}.{'pl' if language == 'perl' else 'py'}"
@@ -289,6 +369,7 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
         "language": spec["language"],
         "params": merged,
         "campaign": campaign,
+        "molecules": [molecule_memory.summary(molecule_memory.find(n)) for n in wanted],
         "drop_dir_in_script": drop,
         "saved_copy": str(saved),
         "syntax_check": check_syntax(script, language),
@@ -302,4 +383,4 @@ def generate_script(kind: str, params: dict[str, Any] | None = None, drop_dir_vm
 
 
 def generate_test_script(kind: str = "ms_forcite_geomopt", drop_dir_vm: str | None = None) -> dict[str, Any]:
-    return generate_script(kind, None, drop_dir_vm, None)
+    return generate_script(kind, dict(SCRIPTS[kind]["params"]), drop_dir_vm, "none")

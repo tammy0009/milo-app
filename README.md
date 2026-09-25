@@ -138,8 +138,22 @@ The old MILO database (`milo-neo4j`, 7474/7687) is separate and untouched.
 The MCP lives here too (`src/milo_app/mcp/`): it writes BIOVIA scripts (Materials Studio Python,
 Discovery Studio Perl) whose output is a MILO bundle, searches the BIOVIA docs, checks scripts before
 they go to the VM, and reads and adds to this app's graph (`milo_graph_data`, `milo_add_prediction`,
-`milo_remove_prediction`). Before it writes a script it asks whether the runs are part of a campaign,
-a new one you name or an existing one (`milo_list_campaigns`), and writes the name into the bundle.
+`milo_remove_prediction`).
+
+Three rules hold for every script it writes, and the tools refuse to go on without them:
+
+- **Campaign:** it asks whether the runs are part of a campaign, a new one you name or an existing
+  one (`milo_list_campaigns`). The answer is a name or "none"; a blank is refused, and the check
+  confirms the bundle records exactly that answer.
+- **Every input from you:** every setting of a script must be given explicitly. The suggested values
+  in `milo_list_scripts` are only offered to you, never filled in silently, and a missing one is refused.
+- **Molecules from memory:** a molecule is given once, as a SMILES or a structure file, and saved
+  with `milo_save_molecule`. RDKit checks it and returns its formula, weight, SMILES and InChIKey for
+  you to confirm. A SMILES that leaves stereo open is refused until you choose. Scripts then get the
+  saved structure from MILO, character for character (a SMILES becomes a 3D MOL file with every
+  hydrogen, checked to be the same molecule). It carries a checksum that the script checks on the VM
+  before using it. The memory is in `data/molecules/`, one file per molecule.
+
 It is a local stdio server; Claude Code runs it with:
 
 ```powershell

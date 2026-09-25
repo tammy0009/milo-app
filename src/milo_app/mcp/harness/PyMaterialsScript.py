@@ -103,6 +103,12 @@ class _Documents:
         self.docs.append(doc)
         return doc
 
+    def Import(self, filename):
+        """Like Materials Studio: the file must exist; it becomes a document named after it."""
+        if not os.path.isfile(filename):
+            raise IOError("Import: no file at %s" % filename)
+        return self.New(os.path.basename(filename))
+
     def SaveAll(self):
         for doc in self.docs:
             doc.Export(os.path.join(os.getcwd(), doc.Name))

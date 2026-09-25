@@ -16,6 +16,15 @@ import traceback as _milo_traceback
 MILO_CONTRACT = "0.2"
 
 
+def _milo_checksum(text):
+    """FNV-1a (32-bit) over the characters: the same as MILO's molecule memory computes."""
+    h = 0x811C9DC5
+    for ch in text:
+        h ^= ord(ch)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return "fnv1a:%08x" % h
+
+
 def _milo_now():
     return _milo_dt.datetime.now(_milo_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -273,6 +282,28 @@ class MiloBundle:
         content = self.safe(report, "Content") if report is not None else None
         if content:
             self.write_text("OUTPUT", "%s_report.txt" % (report_name or stage or "run"), content)
+
+    # ---- molecules from MILO's molecule memory ----
+    def molecule_file(self, name, molecules):
+        """Write a molecule from MILO's molecule memory (MILO_MOLECULES, put in this script by the MCP) into
+        INPUT/files/molecules/ exactly as it was saved, and record what it is. Its checksum is checked
+        first: a molecule that changed on its way here stops the run. Returns the file's path, ready for
+        Documents.Import."""
+        if name not in molecules:
+            raise KeyError("molecule %r is not in this script's MILO_MOLECULES" % name)
+        entry = molecules[name]
+        found = _milo_checksum(entry["structure"])
+        if found != entry["checksum"]:
+            raise ValueError("molecule %r changed on its way here (checksum %s, saved as %s): get a fresh script "
+                             "from the MILO MCP" % (name, found, entry["checksum"]))
+        path = self.input_path("molecules/%s.%s" % (entry["file_name"], entry["format"]))
+        _milo_os.makedirs(_milo_os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(entry["structure"])
+        for key in ("smiles", "canonical_smiles", "formula", "inchikey", "checksum"):
+            if entry.get(key):
+                self.input("molecule.%s.%s" % (name, key), entry[key])
+        return path
 
     # ---- errors ----
     def record_error(self, exc):

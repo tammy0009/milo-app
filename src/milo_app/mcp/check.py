@@ -20,7 +20,11 @@ from typing import Any
 from milo_app import graph as app_graph
 from milo_app.blind import bundle_values
 from milo_app.bundle import find_bundles, read_bundle
-from milo_app.mcp.scripts import check_perl_syntax, check_python_syntax, perl_command, perl_string
+from milo_app.config import get_settings
+from milo_app.mcp import molecules as molecule_memory
+from milo_app.mcp.scripts import (
+    campaign_choice, check_perl_syntax, check_python_syntax, fill_molecules, perl_command, perl_string,
+)
 
 HARNESS = Path(__file__).parent / "harness"  # fake Materials Studio (Python)
 # Discovery Studio (Perl): my $MILO_DROP_DIR = '...';  (single-quoted, with \\ and \' escaped)
@@ -60,11 +64,28 @@ def _contract_problems(bundle, delivered: bool) -> list[str]:
     return problems
 
 
-def check_script(script: str, timeout_s: int = 180, product: str = "materials_studio") -> dict[str, Any]:
+def check_script(script: str, timeout_s: int = 180, product: str = "materials_studio",
+                 campaign: str | None = None, molecules: list[str] | None = None) -> dict[str, Any]:
     """Run `script` against the fake BIOVIA in a temp job folder and report on the bundle it wrote.
 
-    product: materials_studio (Python, fake PyMaterialsScript) or discovery_studio (Perl, fake DiscoveryScript)."""
+    product: materials_studio (Python, fake PyMaterialsScript) or discovery_studio (Perl, fake DiscoveryScript).
+    campaign: the user's answer (a name or "none"); the bundle must carry exactly that.
+    molecules: names from MILO's molecule memory to put into the script's {{MOLECULES}} placeholder; each must
+    then be used through molecule_file. The finished script (molecules in) is saved and returned."""
     perl = product.lower().startswith("discovery")
+    campaign = campaign_choice(campaign)
+    molecules = list(molecules or [])
+    unknown = [n for n in molecules if molecule_memory.find(n) is None]
+    if unknown:
+        raise ValueError("not in MILO's molecule memory: %s (save them first with milo_save_molecule)" % ", ".join(unknown))
+    molecules = [molecule_memory.find(n)["name"] for n in molecules]  # saved names: the keys in MILO_MOLECULES
+    filled = fill_molecules(script, molecules, "perl" if perl else "python",
+                            "discovery_studio" if perl else "materials_studio")
+    final = {}
+    if filled != script:
+        script = filled
+        final = {"script": script, "note_script": "the molecules are now in the script: give the user this script "
+                                                  "(or the saved copy), never a retyped one"}
     syntax = check_perl_syntax(script) if perl else check_python_syntax(script)
     if syntax["ok"] is None:  # no Perl on this PC
         return {"ok": None, "stage": "syntax", "syntax": syntax, "problems": [syntax["note"]]}
@@ -135,8 +156,26 @@ def check_script(script: str, timeout_s: int = 180, product: str = "materials_st
                 problems.append("no requested.* inputs: the MILO app has no knobs to model or make ghosts from")
         except Exception as exc:
             problems.append("the MILO app cannot read this bundle: %s: %s" % (type(exc).__name__, exc))
+        # The user's answers must be what the run records.
+        recorded = app_graph.campaign_of(bundle.manifest)
+        if recorded != campaign:
+            problems.append("the bundle's campaign is %r but the user's answer was %r: pass campaign=MILO_CAMPAIGN to "
+                            "the writer, with MILO_CAMPAIGN set to that answer" % (recorded, campaign or "none"))
+        inputs = {item.name for item in bundle.items_in("INPUT")}
+        for name in molecules:
+            if not any(n.startswith("molecule.") and n.endswith(".checksum") and n[9:-9].lower() == name.lower()
+                       for n in inputs):
+                problems.append("molecule %r is in the script but never used: load it with molecule_file(%r, "
+                                "MILO_MOLECULES), never with a typed-in structure" % (name, name))
         outputs = {item.name: item.value for item in bundle.items_in("OUTPUT")}
+        saved = get_settings().data_dir / "generated_scripts" / (
+            "checked_%s.%s" % (bundle.bundle_id, "pl" if perl else "py"))
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        saved.write_text(script, encoding="utf-8")
         result.update(
+            saved_copy=str(saved),
+            campaign=campaign,
+            **final,
             ok=not problems and bundle.manifest.get("status") != "failed",
             bundle_id=bundle.bundle_id,
             manifest=bundle.manifest,

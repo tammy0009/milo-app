@@ -16,6 +16,7 @@ use ForceFieldDiscoveryScript;
 my $MILO_BUNDLE_ID = '{{BUNDLE_ID}}';
 my $MILO_DROP_DIR = '{{DROP_DIR}}';
 my $MILO_CAMPAIGN = {{CAMPAIGN}};  # the campaign this run belongs to, or undef
+my %MILO_MOLECULES = {{MOLECULES}};  # from MILO's molecule memory, exactly: $bundle->molecule_file($name, \%MILO_MOLECULES)
 
 {{BUNDLE_WRITER}}
 

@@ -307,6 +307,37 @@ sub record_task {
     return $files;
 }
 
+# ---- molecules from MILO's molecule memory ----
+sub checksum {  # FNV-1a (32-bit) over the characters: the same as MILO's molecule memory computes
+    my $text = shift;
+    my $h = 0x811C9DC5;
+    for my $ch (split //, $text) {
+        $h ^= ord($ch);
+        { use integer; $h = ($h * 16777619) & 0xFFFFFFFF; }
+    }
+    return sprintf("fnv1a:%08x", $h);
+}
+
+# Write a molecule from MILO's molecule memory (%MILO_MOLECULES, put in this script by the MCP) into
+# INPUT/files/molecules/ exactly as it was saved, and record what it is. Its checksum is checked first:
+# a molecule that changed on its way here stops the run. Returns the file's path, ready for Open.
+sub molecule_file {
+    my ($self, $name, $molecules) = @_;
+    my $entry = $molecules->{$name} or die "molecule '$name' is not in this script's MILO_MOLECULES\n";
+    my $found = checksum($entry->{structure});
+    die "molecule '$name' changed on its way here (checksum $found, saved as $entry->{checksum}): "
+        . "get a fresh script from the MILO MCP\n" unless $found eq $entry->{checksum};
+    my $path = $self->input_path("molecules/$entry->{file_name}.$entry->{format}");
+    File::Path::make_path(File::Basename::dirname($path));
+    open(my $handle, ">:raw", $path) or die "cannot write $path: $!\n";
+    print $handle $entry->{structure};
+    close($handle);
+    for my $key (qw(smiles canonical_smiles formula inchikey checksum)) {
+        $self->input("molecule.$name.$key", text($entry->{$key})) if defined $entry->{$key} && length $entry->{$key};
+    }
+    return $path;
+}
+
 # ---- errors ----
 sub record_error {
     my ($self, $error) = @_;

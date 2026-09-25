@@ -17,6 +17,7 @@ from PyMaterialsScript import *
 MILO_BUNDLE_ID = "{{BUNDLE_ID}}"
 MILO_DROP_DIR = r"{{DROP_DIR}}"
 MILO_CAMPAIGN = {{CAMPAIGN}}  # the campaign this run belongs to, or None
+MILO_MOLECULES = {{MOLECULES}}  # from MILO's molecule memory, exactly: use bundle.molecule_file(name, MILO_MOLECULES)
 MILO_PARAMS = {{PARAMS}}
 
 {{BUNDLE_WRITER}}
