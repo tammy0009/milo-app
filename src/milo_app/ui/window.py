@@ -80,7 +80,7 @@ class Splash(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("Splash")
-        wordmark = QLabel("MILO", objectName="SplashWordmark", alignment=Qt.AlignmentFlag.AlignCenter)
+        wordmark = QLabel(theme.WORDMARK_TEXT, objectName="SplashWordmark", alignment=Qt.AlignmentFlag.AlignCenter)
         wordmark.setFont(theme.wordmark_font("splash"))
         self.detail = QLabel("Starting MILO…", objectName="SplashDetail", alignment=Qt.AlignmentFlag.AlignCenter)
         self.error = QLabel(objectName="SplashError", alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
@@ -347,7 +347,7 @@ class MainWindow(QMainWindow):
     # ---- building
 
     def _build_main(self) -> QWidget:
-        wordmark = QLabel("MILO", objectName="Wordmark")
+        wordmark = QLabel(theme.WORDMARK_TEXT, objectName="Wordmark")
         wordmark.setFont(theme.wordmark_font("wordmark"))
         self.search = QLineEdit(placeholderText="Search simulations")
         self.search.setFixedWidth(320)

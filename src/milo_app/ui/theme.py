@@ -16,7 +16,8 @@ from milo_app.config import ASSETS
 COLORS = {
     "ground": "#ffffff",      # window background
     "surface": "#f6f6f6",     # panels, table headers
-    "ink": "#000000",         # main text, the MILO wordmark
+    "ink": "#000000",         # main text
+    "brand": "#e10600",       # the MILO wordmark, on the starting screen and in the top bar
     "muted": "#6b6b6b",       # secondary text
     "line": "#e4e4e4",        # borders and dividers
     "select": "#000000",      # selected row background
@@ -222,6 +223,7 @@ QLabel#GraphHint {{ background: {surface}; color: {muted}; border: 1px solid {li
                      padding: 4px 12px; font-size: {small}px; }}
 
 QWidget#Splash {{ background: {ground}; }}
+QLabel#Wordmark, QLabel#SplashWordmark {{ color: {brand}; }}
 QLabel#SplashDetail {{ color: {muted}; }}
 QLabel#SplashError {{ color: {bad}; font-size: {small}px; }}
 
@@ -264,6 +266,7 @@ def apply(app: QApplication) -> None:
 # Qt stylesheets cannot space letters, so the two MILO wordmarks are styled here instead.
 # Spacing is extra pixels between letters.
 WORDMARKS = {"wordmark": 5, "splash": 14}
+WORDMARK_TEXT = "MILO -"
 
 
 def _with_fallbacks(f: QFont) -> QFont:
