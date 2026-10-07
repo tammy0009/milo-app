@@ -31,7 +31,18 @@ mcp = MCPServer(
         "{{MOLECULES}} line (Perl: my %MILO_MOLECULES = {{MOLECULES}};), bundle.molecule_file(name, MILO_MOLECULES) "
         "to load each one, and milo_check_script(..., molecules=[names]) to fill them in; give the user the "
         "script it returns. "
-        "The MILO app's graph holds every finished simulation: read it with milo_graph_data. "
+        "The MILO app's graph holds every finished simulation: read it with milo_graph_data. To answer a question "
+        "about the data, work in this order: milo_list_campaigns (which campaign and knobs; ask the user if the "
+        "question does not clearly name one), then milo_investigate(campaign, target) FIRST: it is the fixed evidence "
+        "pass and its packet is your evidence. Then, only as needed, drill down with milo_graph_data (raw runs; leave "
+        "fields out for a WHY), milo_relationships (one descriptor), milo_formula (solve for a value or an untried "
+        "setting, with its range). Say how sure the numbers are given how few runs there are, and follow its flags: "
+        "when the runs cannot separate two explanations, say so and propose the experiment that would. Label every "
+        "claim as measured, fitted (from a tool), or hypothesis (your own idea, from chemistry or literature); never "
+        "state a number that is not in a tool result, and do no arithmetic of your own. Before "
+        "you name anything as the reason for a result, check that exact pair inside the campaign "
+        "(milo_relationships with descriptor= and campaign=, or milo_formula with one predictor) and quote its "
+        "run count and confidence; a reason with no checked pair is a guess, and must be called one. "
         "FAILED RUNS: check milo_run_errors whenever you read the graph or plan runs, and tell the user about any "
         "failed run straight away (which run, its error in plain words, what it points to). For a campaign, say "
         "whether the failures look like one shared cause (fix the script, rerun the campaign) or separate ones "
@@ -144,13 +155,59 @@ def milo_check_script(
 
 
 @mcp.tool()
-def milo_graph_data(fields: list[str] | None = None) -> dict[str, Any]:
+def milo_graph_data(fields: list[str] | None = None, campaign: str = "") -> dict[str, Any]:
     """Read the MILO app's graph: every simulation (its bundle.json fields, inputs and outputs with units) and every
     prediction already made (by the app's calculation or by you), with its confidence.
 
     fields: only inputs/outputs whose name contains one of these (case-insensitive), e.g. ["density", "temperature"].
-    Leave it out to get everything. Long values (settings dumps, arrays) are shortened."""
-    return graph_tools.graph_data(fields)
+    Leave it out to get everything. Long values (settings dumps, arrays) are shortened.
+    campaign: only this campaign's runs (and the predictions based on them); "none" for runs in no campaign.
+    Leave it out for every run. For a WHY question leave `fields` out too: the explanation is often in a column
+    you would have filtered away (packing, cell size, run time)."""
+    return graph_tools.graph_data(fields, campaign or None)
+
+
+@mcp.tool()
+def milo_investigate(campaign: str, target: str, top: int = 8) -> dict[str, Any]:
+    """START HERE for any question about why a result came out as it did, or which run/setting is best.
+    One fixed evidence pass for one result in one campaign, always the same steps: the runs ranked on the result;
+    each knob fitted against it (slope with its uncertainty, R2); the other measured values that move with it,
+    with a confidence, and for each whether it merely restates a knob or ties with the knob so these runs cannot
+    tell them apart, plus its link to each knob (the second hop: knob -> value -> result); and flags for what the
+    runs cannot settle (few runs, missing values, an unexplained remainder).
+
+    campaign: a name from milo_list_campaigns. target: the result, by name or part of a name (e.g. "E_int");
+    ambiguous or unknown names are refused with the choices. top: how many related values to return.
+    Every number in the packet is computed by code. Quote them; label your own ideas as hypotheses; add no numbers."""
+    return graph_tools.investigate(campaign, target, top)
+
+
+@mcp.tool()
+def milo_relationships(descriptor: str = "", campaign: str = "", min_confidence: float = 0.0, limit: int = 25,
+                       include_points: bool = False) -> dict[str, Any]:
+    """The app's calculated relationships between numbers, strongest first: for every pair of numeric descriptors,
+    how many runs have both, the correlation r and p, and a confidence (1 - Efron local false discovery rate).
+    A pair with a knob the user set is kind 'cause'; two measured values are an 'association', not proof.
+    Use it to ask WHY a result differs: e.g. descriptor="E_int" lists everything that moves with E_int (density,
+    cell volume, ...), if those were recorded.
+
+    descriptor: only pairs whose name contains this (case-insensitive). campaign: worked out again over just that
+    campaign's runs (as the Ghosts tab does); leave out for the stored ones over every run. min_confidence: 0-1.
+    include_points: add the (run, a, b) points behind each pair. Few runs give low confidence: say so."""
+    return graph_tools.relationships(descriptor, campaign or None, min_confidence, limit, include_points)
+
+
+@mcp.tool()
+def milo_formula(target: str, predictors: list[str], campaign: str = "",
+                 at: dict[str, float] | None = None) -> dict[str, Any]:
+    """Solve for a number with the app's own Bayesian linear regression: how `target` follows from `predictors`,
+    fitted over every run that has them all (or one campaign's). Returns intercept, slopes with their
+    uncertainty, R2, the scatter, and the observed vs fitted values.
+    at: predictor values to evaluate, e.g. {"pla_fraction": 0.6}; returns the guess with a 90 % range, a confidence
+    (chance it lands within 5 %), and a warning when the point is outside the tried range (extrapolation).
+    Names may be partial ("E_int", "pla"); an ambiguous name is refused with the choices. This is the calibrated
+    way to answer 'what would it be at X' or 'which X is best': quote its range, not just the number."""
+    return graph_tools.formula(target, predictors, campaign or None, at)
 
 
 @mcp.tool()

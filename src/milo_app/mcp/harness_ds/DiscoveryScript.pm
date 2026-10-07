@@ -90,9 +90,24 @@ sub singleBond () { 1 }
 sub doubleBond () { 2 }
 sub tripleBond () { 3 }
 
+package Mdm::Point;
+sub Create { my ($x, $y, $z) = @_; return bless {X => $x, Y => $y, Z => $z}, "Mdm::Point" }
+sub X { $_[0]{X} }
+sub Y { $_[0]{Y} }
+sub Z { $_[0]{Z} }
+
 package Mdm::Atom;
-sub new { my ($class, $element) = @_; return bless {props => {Name => $element, Element => $element}}, $class }
+sub new { my ($class, $element) = @_; return bless {props => {Name => $element, Element => $element}, xyz => [0, 0, 0]}, $class }
 sub Name { $_[0]{props}{Name} }
+sub ElementSymbol { $_[0]{props}{Element} }
+sub XYZ { Mdm::Point::Create(@{$_[0]{xyz}}) }  # the real API: $atom->XYZ->X (Mdm::Point class docs)
+
+# a residue of a protein read from a PDB file: Name "SER221", Id 221, Abbreviation "SER", its atoms
+package Mdm::AminoAcid;
+sub Name { $_[0]{name} }
+sub Id { $_[0]{id} }
+sub Abbreviation { $_[0]{abbreviation} }
+sub Atoms { DiscoveryScript::FakeArray->new(@{$_[0]{atoms}}) }
 sub GetProperty { $_[0]{props}{$_[1]} }
 sub SetProperty { $_[0]{props}{$_[1]} = $_[2] }
 sub PropertyNames { DiscoveryScript::FakeArray->new(sort keys %{$_[0]{props}}) }
@@ -123,6 +138,19 @@ sub Create { return bless {molecules => [], props => {}}, "Mdm::Document" }
 sub CreateFromPdbId { my ($id) = @_; return DiscoveryScript::OpenFromUrl("$id.pdb") }
 sub Molecules { DiscoveryScript::FakeArray->new(@{$_[0]{molecules}}) }
 sub Atoms { DiscoveryScript::FakeArray->new(map { @{$_->{atoms}} } @{$_[0]{molecules}}) }
+sub AminoAcids {
+    my ($self) = @_;
+    my (@residues, %seen);
+    for my $atom (map { @{$_->{atoms}} } @{$self->{molecules}}) {
+        my $residue = $atom->{residue} or next;
+        my ($abbreviation, $id) = @$residue;
+        my $key = "$abbreviation$id";
+        push @residues, $seen{$key} = bless({name => $key, id => $id, abbreviation => $abbreviation, atoms => []},
+                                            "Mdm::AminoAcid") unless $seen{$key};
+        push @{$seen{$key}{atoms}}, $atom;
+    }
+    return DiscoveryScript::FakeArray->new(@residues);
+}
 sub CreateMolecule {
     my ($self) = @_;
     my $molecule = Mdm::Molecule->new("Molecule" . (@{$self->{molecules}} + 1));
@@ -150,7 +178,10 @@ sub Save {
     ($path, $format) = @{$path}{qw(Path FormatType)} if ref $path;
     my @lines = ("FAKE-MDM $format");
     for my $molecule (@{$self->{molecules}}) {
-        push @lines, "MOLECULE", map({ "ATOM\t$_->{props}{Element}" . ($_->{props}{ForcefieldType} ? "\t$_->{props}{ForcefieldType}" : "") } @{$molecule->{atoms}}),
+        # ATOM element, forcefield type, x y z, atom name, residue (abbreviation id): coordinates survive a save
+        push @lines, "MOLECULE", map({ join("\t", "ATOM", $_->{props}{Element}, $_->{props}{ForcefieldType} // "",
+                                            "@{$_->{xyz}}", $_->{props}{Name}, $_->{residue} ? "@{$_->{residue}}" : "") }
+                                     @{$molecule->{atoms}}),
             map({ "PROP\t$_\t$molecule->{props}{$_}" } sort keys %{$molecule->{props}});
     }
     DiscoveryScript::_write($path, join("\n", @lines) . "\n");
@@ -159,12 +190,48 @@ sub _load {
     my ($path) = @_;
     my $doc = Create();
     open(my $fh, "<", $path) or die "cannot read $path: $!\n";
+    my @lines = <$fh>;
+    close $fh;
+    # A real structure file (as molecule_file writes them from MILO's molecule memory): one molecule with one
+    # atom per atom record, so scripts that open a PDB/MOL file see its atoms, as they would in Discovery Studio.
+    my @pdb_atoms = grep { /^(ATOM  |HETATM)/ } @lines;
+    if (@pdb_atoms || (@lines > 3 && $lines[3] =~ /V2000/)) {
+        my $molecule = $doc->CreateMolecule;
+        $molecule->{props}{Name} = File::Basename::basename($path) =~ s/\.\w+$//r;
+        if (@pdb_atoms) {
+            for my $record (@pdb_atoms) {
+                my $element = length($record) >= 78 ? substr($record, 76, 2) : "";
+                $element =~ s/\s+//g;
+                ($element = substr($record, 12, 2)) =~ s/[\s\d]//g unless length $element;
+                my $atom = $molecule->CreateAtom(ucfirst lc $element);
+                my ($name, $residue, $number) = map { (my $v = $_) =~ s/\s+//g; $v }
+                                                substr($record, 12, 4), substr($record, 17, 3), substr($record, 22, 4);
+                $atom->{props}{Name} = $name;
+                $atom->{xyz} = [map { substr($record, $_, 8) + 0 } 30, 38, 46];
+                $atom->{residue} = [$residue, $number] if $record =~ /^ATOM/;
+            }
+        }
+        else {
+            my $count = substr($lines[3], 0, 3) + 0;  # MOL V2000 counts line: atoms in columns 1-3 ("168176" = 168 atoms, 176 bonds)
+            for (0 .. $count - 1) {
+                my ($x, $y, $z, $element) = split ' ', $lines[4 + $_];
+                $molecule->CreateAtom($element)->{xyz} = [$x + 0, $y + 0, $z + 0];
+            }
+        }
+        return $doc;
+    }
     my $molecule;
-    while (my $line = <$fh>) {
+    for my $line (@lines) {
         chomp $line;
         my @f = split /\t/, $line;
         if ($f[0] eq "MOLECULE") { $molecule = $doc->CreateMolecule }
-        elsif ($f[0] eq "ATOM" && $molecule) { my $a = $molecule->CreateAtom($f[1]); $a->{props}{ForcefieldType} = $f[2] if $f[2] }
+        elsif ($f[0] eq "ATOM" && $molecule) {
+            my $a = $molecule->CreateAtom($f[1]);
+            $a->{props}{ForcefieldType} = $f[2] if $f[2];
+            $a->{xyz} = [split ' ', $f[3]] if $f[3];
+            $a->{props}{Name} = $f[4] if $f[4];
+            $a->{residue} = [split ' ', $f[5]] if $f[5];
+        }
         elsif ($f[0] eq "PROP" && $molecule) { $molecule->{props}{$f[1]} = $f[2] }
     }
     return $doc;
@@ -393,6 +460,11 @@ sub WaitForCompletion {
             $molecule->{props}{"Electrostatic Energy"} = -20.25;
             $molecule->{props}{"Initial Potential Energy"} = 3.75;
             $molecule->{props}{"RMS Gradient"} = 0.0931;
+            # docking protocols tag every pose they return with its score (placeholder values, not physics)
+            if ($doc->{name} =~ /CDOCKER/i) {
+                $molecule->{props}{"-CDOCKER_ENERGY"} = 25.5;
+                $molecule->{props}{"-CDOCKER_INTERACTION_ENERGY"} = 30.25;
+            }
         }
         $mdm->Save(File::Spec->catfile($out, "Output.dsv"), "dsv");
         push @log, "Processed $key";
